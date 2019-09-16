@@ -1,0 +1,363 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+    KeyName:
+        Description: names of an existing EC2 KeyPair
+        Type: AWS::EC2::KeyPair::KeyName
+    EC2InstanceType:
+        Type: String
+        Default: t3a.medium
+        Description: the instance spec type (e.g. t2.micro) of ec2 
+    SubnetId:
+        Type: String
+        Default: ""
+    SecurityGroupId:
+        Type: AWS::EC2::SecurityGroup::Id
+    InstanceVolumeSize:
+        Type: String
+        Default: 16
+        Description: Unit = GB
+    IamInstanceProfile:
+        Type: String
+        Default: ''
+    IamInstanceRole:
+        Type: String
+        Default: ''
+    AMIImageId:
+        Type: String
+        # nvirginia
+        Default: ami-024a64a6685d05041
+    EnvType:
+        Description: Environment type
+        Default: dev
+        Type: String
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+    GitlabUserName:
+        Type: String      
+    GitlabPassword:
+        Type: String      
+
+Resources:
+    # ####################################################################################
+    # ######### comment out in production!!!!! temporary resources for development and test. #####
+    # ####################################################################################
+    # # create an IAM role
+    # S3FullAccessRole:
+    #     Type: "AWS::IAM::Role"
+    #     Properties:
+    #         AssumeRolePolicyDocument:
+    #             Version: "2012-10-17"
+    #             Statement: 
+    #                 -
+    #                   Effect: "Allow"
+    #                   Principal:
+    #                     Service:
+    #                       - "ec2.amazonaws.com"
+    #                   Action:
+    #                     - "sts:AssumeRole"
+    #         Path: "/"
+    #         # source: https://qiita.com/kotatsu360/items/badfd3fabf2d8f385501
+    #         # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    #         ManagedPolicyArns: 
+    #             - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+
+    # # create instance profile, which is necessary to attach a role to ec2 instance
+    # IamInstanceProfile:  
+    #     Type: AWS::IAM::InstanceProfile  
+    #     Properties:  
+    #         Path: "/"  
+    #         Roles:  
+    #         - !Ref S3FullAccessRole
+
+    # SecurityGroupId:
+    #     Type: AWS::EC2::SecurityGroup
+    #     Properties:
+    #         GroupDescription: enable only ssh
+    #         VpcId : !Ref LogsVPC
+    #         SecurityGroupIngress:
+    #             # ssh port (todo: disable this later )
+    #             # https://dev.classmethod.jp/etc/bastion-3way-rk/
+    #             - IpProtocol: tcp
+    #               FromPort: 22
+    #               ToPort: 22
+    #               CidrIp: 0.0.0.0/0
+    #             # https port
+    #             - IpProtocol: tcp
+    #               FromPort: 443
+    #               ToPort: 443
+    #               CidrIp: 0.0.0.0/0
+    #         Tags:
+    #             # name of the security group
+    #             - Key: Name
+    #               Value: 'SecurityGroupForPrivateSubnetInstances'
+
+    # LogsVPC:
+    #     Type: AWS::EC2::VPC
+    #     Properties:
+    #         CidrBlock: 10.1.0.0/16
+    #         EnableDnsSupport: 'true'
+    #         EnableDnsHostnames: 'true'
+    #         InstanceTenancy: default
+    #         Tags:
+    #             - Key: vpcTagStackId
+    #               Value: Ref 'AWS::StackId'
+    #             - Key: Name
+    #               # this works
+    #               # Value: !Join [ "-", [ "Ref":"AWS::StackId", !Sub "${AWS::StackName}" ] ]
+    #               Value: !Sub "${AWS::StackName}-LogsVPC"
+
+    # # Create Public Route Table
+    # PublicRouteTable:
+    #     Type: AWS::EC2::RouteTable
+    #     Properties:
+    #         VpcId: !Ref LogsVPC
+    #         Tags:
+    #         # - Key: EnvType
+    #         #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicRouteTable" ] ]
+    #         - Key: Name
+    #           Value: RouteTableForPublicSubnets
+
+    # SubnetId:
+    #     Type: AWS::EC2::Subnet
+    #     Properties:
+    #         VpcId: !Ref LogsVPC
+    #         CidrBlock: 10.1.1.0/24
+    #         AvailabilityZone:
+    #             Fn::Select:
+    #                 - '0'
+    #                 - Fn::GetAZs:
+    #                     Ref: AWS::Region
+    #         Tags:
+    #         # - Key: Name
+    #         #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+    #         - Key: Name
+    #           Value: !Sub "${AWS::StackName}-Subnet"
+    # SubnetARouteTableAssociation:
+    #     Type: AWS::EC2::SubnetRouteTableAssociation
+    #     Properties:
+    #         SubnetId: !Ref SubnetId
+    #         RouteTableId: !Ref PublicRouteTable
+
+    # # Create Internet Gateway
+    # InternetGatewayLogs:
+    #     Type: "AWS::EC2::InternetGateway"
+    #     Properties:
+    #         Tags:
+    #             - Key: Name
+    #               # Value: !Join [ "-", [ "Ref":"EnvType", "InternetGatewayLogs" ] ]
+    #               Value: "InternetGatewayLogs"
+    # # attach Internet Gateway to VPC
+    # VPCInternetGatewayAttachment:
+    #     Type: AWS::EC2::VPCGatewayAttachment
+    #     Properties:
+    #         VpcId: !Ref LogsVPC
+    #         InternetGatewayId: !Ref InternetGatewayLogs
+    # # associate the route table with Internet gateway
+    # RouteTableInternetGatewayAttachment:
+    #     DependsOn: VPCInternetGatewayAttachment
+    #     Type: AWS::EC2::Route
+    #     Properties:
+    #         RouteTableId: !Ref PublicRouteTable
+    #         DestinationCidrBlock: 0.0.0.0/0
+    #         GatewayId: !Ref InternetGatewayLogs
+    # ##############################################################################
+    # ######### temporary resources for development and test. delete later end #####
+    # ##############################################################################
+
+    EC2InstanceLogReceiver:
+        Type: AWS::EC2::Instance
+        Properties:
+            # the image id of the original AMI from AWS
+            # ImageId: !FindInMap
+            #     - RegionMap
+            #     - !Ref 'AWS::Region'
+            #     - AMIImageId
+            ImageId: !Ref AMIImageId
+            # the spec of the instance
+            InstanceType: !Ref EC2InstanceType
+            # name of key-pair for ssh access
+            KeyName: !Ref KeyName
+
+            # https://aws.amazon.com/jp/ec2/pricing/on-demand/
+            # 現行世代のインスタンスタイプの場合、EBS 最適化はデフォルトで有効になっており、追加料金は発生しません。旧世代のインスタンスタイプの場合、EBS 最適化の料金は旧世代の料金ページに記載されています。
+            EbsOptimized: true
+
+            # インスタンスの詳細モニタリングが Auto Scaling グループに対して有効であるかを示します。デフォルトでは、このプロパティは true (有効) に設定されています。
+            Monitoring: true
+
+            # storage size of attached EBS: https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html, https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-ec2.html
+            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html
+            BlockDeviceMappings:
+                -
+                    DeviceName: "/dev/sda1"
+                    # DeviceName: "/dev/xvda"
+                    Ebs:
+                      # todo: check if you want to change the blockstorage mode (having mor io)
+                      VolumeType: "gp2"
+                      # VolumeType: "io1"
+                      # Iops: "200"
+                      DeleteOnTermination: true
+                      VolumeSize: !Ref InstanceVolumeSize
+
+            # IAM role
+            IamInstanceProfile: !Ref IamInstanceProfile
+
+            NetworkInterfaces:
+                  # AssociatePublicIpAddress should be false in production, when making the subnet private   
+                # - AssociatePublicIpAddress: true
+                - AssociatePublicIpAddress: false
+                  DeleteOnTermination: true
+                  DeviceIndex: 0
+                  # list of the names of the scurity groups associated to this network interface
+                  # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-network-iface-embedded.html
+                  GroupSet:
+                      - !Ref SecurityGroupId
+                  # subnet attached to this ec2 instance
+                  SubnetId: !Ref SubnetId
+
+            # 起動するインスタンスのテナンシー (default、dedicated、host など)。
+            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-instance.html
+            Tenancy: default
+
+            # tag of the instance
+            Tags: 
+                - Key: Name
+                  # Value: 'EC2InstanceLogReceiver'
+                  Value: !Sub "${EnvType}-EC2InstanceLogReceiver"
+            # e.g. if prod, the instance type is t2.small, if dev, t2.micro, if test, t2.nano
+            # InstanceType: !If [CreateProdResources, t2.small, !If [CreateDevResources, t2.micro, t2.nano]]
+
+            # the shell srcipt running at launch. it will be processed before cfn-init script.
+            UserData:
+                # git is installed by default. do not need install it by command
+                # the forllowing syntax did not work. The log said "/bin/bash: - : invalid option"
+                # UserData: !Base64
+                #     Fn::Sub: '#!/bin/bash -x
+                Fn::Base64: !Sub | # Sub = 'Substitute'. the pipe indicates you do not require back slash for escaping special chars.
+                    #!/bin/bash -xe
+                    export HOME=/root
+                    # env variable setting to install cfn-init packages and apt-get upgrade without manual interaction https://bugs.launchpad.net/ubuntu/+source/eglibc/+bug/935681
+                    export DEBIAN_FRONTEND=noninteractive
+
+                    apt-get -y update
+
+                    # change time zone 
+                    #  timedatectl set-timezone Asia/Tokyo
+                    timedatectl set-timezone UCT
+
+                    ############################
+                    # install packages for cfn-init (https://gist.github.com/mmasko/66d34b651642525c63cd39251e0c2a8b)
+                    apt-get -y install python-setuptools
+                    mkdir -p /opt/aws/bin
+                    python /usr/lib/python2.7/dist-packages/easy_install.py --script-dir /opt/aws/bin https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+                    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-general.html
+                    /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2InstanceLogReceiver --configsets setup --region ${AWS::Region} --role ${IamInstanceRole}
+                    # /opt/aws/bin/cfn-signal -e --stack ${AWS::StackName} --resource EC2InstanceLogReceiver --configsets setup --region ${AWS::Region}
+                    ############################
+
+                    # install docker
+                    apt-get install docker.io -y && \
+
+                    git config --global credential.helper store
+                    
+                    # register the user name and password to clone the repository
+                    echo "https://${GitlabUserName}:${GitlabPassword}@gitlab.com" >> /root/.git-credentials
+
+                    # clone the repository for Dockerfile
+                    git clone <your gitlab url>
+
+                    # todo: substitute login info and domain url to Dockerfile
+                    # sed -i "s/"your_access_key_id"/${AwsAccessKeyId}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+                    # sed -i "s/"your_secret_access_key"/${AwsSecretAccessKey}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+
+                    # # install aws cli for endpoint connection
+                    # apt-get install -y awscli
+                    # export AWS_ACCESS_KEY_ID=${AwsAccessKeyId} 
+                    # export AWS_SECRET_ACCESS_KEY=${AwsSecretAccessKey}
+
+                    ########### watching memory and disk usage setting start ############
+                    # https://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/mon-scripts.html
+                    # https://qiita.com/mitsubachi/items/4b7e3449bbe04e403a9d
+                    # https://blog.mmmcorp.co.jp/blog/2018/05/19/cloudwatch_custom_metrics/
+                    apt-get update
+                    apt-get install unzip -y
+                    apt-get install libwww-perl libdatetime-perl -y
+                    # download and unzip the monitoring code
+                    curl https://aws-cloudwatch.s3.amazonaws.com/downloads/CloudWatchMonitoringScripts-1.2.2.zip -O
+                    unzip CloudWatchMonitoringScripts-1.2.2.zip
+                    rm CloudWatchMonitoringScripts-1.2.2.zip
+                    # cd aws-scripts-mon
+                    
+                    # set commands to crontab (https://stackoverflow.com/questions/37458287/how-to-run-a-cron-job-inside-a-docker-container https://qiita.com/yamikoo@github/items/64c7cd6f2918311a5b0c https://qiita.com/kkoito/items/28d9a453c425b08738d2)
+                    touch /var/log/cron.log
+                    mkdir -p /etc/cron.minutely
+                    echo "*/1 * * * * /aws-scripts-mon/mon-put-instance-data.pl --mem-util --mem-used-incl-cache-buff --mem-avail --disk-space-util --disk-path=/ --from-cron >> /var/log/cron.log 2>&1"  >> /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                    chmod 0644 /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                    # Apply cron job
+                    crontab /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                    ############ watching memory and disk usage setting end ############
+
+                    apt-get -y upgrade
+                    
+                    ########### HTTP connection start ###########
+                    # change the access permission of Dockerfile
+                    # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTP
+                    # build the docker image
+                    # docker build -t logstash-receiver-http-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTP .
+                    # create the docker container
+                    # docker run -itd -p 80:80 logstash-receiver-http-ubuntu
+                    ########### HTTP connection end ###########
+
+                    ########### HTTPS connection start ###########
+                    # change the access permission of Dockerfile
+                    # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+                    # build the docker image
+                    docker build -t logstash-receiver-https-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS /home/ubuntu/logstashDocker/dockerLogstash
+                    # create the docker container
+                    docker run -itd -p 443:443 -v /home/ubuntu/logstashDocker/userInfo:/home/AWS/userInfo logstash-receiver-https-ubuntu
+                    ########### HTTPS connection end ###########
+
+        Metadata:
+            # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html
+            # https://gist.github.com/mmasko/66d34b651642525c63cd39251e0c2a8b
+            # https://github.com/awsdocs/aws-cloudformation-user-guide/blob/master/doc_source/aws-resource-init.md
+            AWS::CloudFormation::Init:
+                configSets:
+                    setup:
+                        - "configure_cfn"
+                configure_cfn:
+                    commands:
+                        test:
+                            command: echo "test CloudFormation::Init pacakage installed and tested" >> /root/cfn-init-test.txt
+        # AWS::CloudFormation::Init:
+        #     configSets:
+        #         SetupWebServer: # the "default" configSet is used when cfn-init is called without -c option
+        #             - "InstallApache"
+        #             - "CreateFiles"
+        #             - "SetupService"
+        #     InstallApache:
+        #         packages:
+        #             yum:
+        #                 httpd: []
+        #     CreateFiles:
+        #         files:
+        #             "/var/www/html/index.html":
+        #                 content: "<html><body><h1>Hello from userdata</h1></body></html>" 
+        #                 mode: "000644"
+        #                 owner: root
+        #                 group: root
+        #     SetupService:
+        #         services:
+        #             sysvinit:
+        #                 httpd:
+        #                     enabled: true
+        #                     ensureRunnig: true
+
+Outputs:
+    EC2InstanceLogReceiverId:
+        Description: ec2 instance id
+        Value: !Ref EC2InstanceLogReceiver
+    PublicDnsName:
+        Description: ec2 instance id
+        Value: !GetAtt EC2InstanceLogReceiver.PublicDnsName
+

@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: template file creating application load balancer 
+
+Parameters:
+    LogsVPCId:
+        Type: AWS::EC2::VPC::Id
+        Default: ''
+    SubnetAId:
+        Type: AWS::EC2::Subnet::Id
+        Default: ''
+    SubnetBId:
+        Type: AWS::EC2::Subnet::Id
+        Default: ''
+    # EC2InstanceLogReceiver1:
+    #     Type: AWS::EC2::Instance::Id
+    #     Default: ''
+    # EC2InstanceLogReceiver2:
+    #     Type: AWS::EC2::Instance::Id
+    #     Default: ''
+    NLBSecurityGroupId:
+        Type: AWS::EC2::SecurityGroup::Id
+        Default: ''
+    EnvType:
+        Description: Environment type
+        Default: dev
+        Type: String
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+
+
+# https://www.qoosky.io/techs/72b56447a3
+# https://jvzoggel.com/2018/08/29/example-aws-cloudformation-template-for-network-load-balancer/
+# ------------------------------------------------------------#
+#  Target Group
+# ------------------------------------------------------------#
+Resources:
+    LogsNLBTargetGroup: 
+        Type: AWS::ElasticLoadBalancingV2::TargetGroup
+        Properties: 
+            VpcId: !Ref LogsVPCId
+            # Name: !Sub "${PJPrefix}-${InternetNLBName}-tg"
+            Name: LogsNLBTargetGroup
+            Protocol: TCP
+            Port: 443
+            HealthCheckProtocol: TCP
+            # see below for proper configuration for nlb
+            # https://docs.aws.amazon.com/ja_jp/elasticloadbalancing/latest/network/target-group-health-checks.html
+            # HealthCheckPort: 443
+            # HealthCheckPath: "/"
+            HealthCheckPort: "traffic-port"
+            HealthyThresholdCount: 3
+            UnhealthyThresholdCount: 3
+            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-targetgroup.html
+            HealthCheckTimeoutSeconds: 10
+            HealthCheckIntervalSeconds: 30
+            # Matcher:
+            #     HttpCode: 200
+            Tags: 
+                - Key: Name
+                  Value: !Sub "LogsNLBTargetGroup-${EnvType}"
+            TargetGroupAttributes:
+                - Key: deregistration_delay.timeout_seconds
+                  Value: 60
+                # - Key: "stickiness.enabled"
+                #   Value: false
+                # - Key: "stickiness.type"
+                #   Value: lb_cookie
+                # - Key: "stickiness.lb_cookie.duration_seconds"
+                #   Value: 86400
+            # Targets:
+            #     - Id: !Ref EC2InstanceLogReceiver1
+            #     - Id: !Ref EC2InstanceLogReceiver2
+
+# ------------------------------------------------------------#
+#  NLB
+# ------------------------------------------------------------#
+    NLB: 
+        Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+        Properties:
+            Name: !Sub "NLB-${EnvType}"
+            Type: network
+            Tags: 
+                - Key: Name
+                  Value: !Sub "NLB-${EnvType}"
+            Scheme: internet-facing
+            # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_LoadBalancerAttribute.html
+            # https://www.gitmemory.com/kisst
+            LoadBalancerAttributes:
+                - Key: load_balancing.cross_zone.enabled
+                  Value: true
+                - Key: "deletion_protection.enabled"
+                  Value: false
+                # https://docs.aws.amazon.com/elasticloadbalancing/latest/classic/config-idle-timeout.html
+                # - Key: "idle_timeout.timeout_seconds"
+                #   Value: 60
+                # https://docs.aws.amazon.com/elasticloadbalancing/latest/APIReference/API_LoadBalancerAttribute.html
+                # https://dev.classmethod.jp/cloud/aws/nlb-accesslog-s3-cfn/
+                - Key: access_logs.s3.enabled
+                  Value: true
+                - Key: access_logs.s3.bucket
+                  Value: !ImportValue S3BucketForLoadBalancerLogId
+                # - Key: access_logs.s3.prefix
+                #   Value: "/"
+            # SecurityGroups:
+            #     - !Ref NLBSecurityGroupId
+            # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+            Subnets: 
+                - !Ref SubnetAId
+                - !Ref SubnetBId
+
+# ------------------------------------------------------------#
+#  NLB Listener
+# ------------------------------------------------------------#
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-listener.html
+    NLBListener: 
+        Type: "AWS::ElasticLoadBalancingV2::Listener"
+        Properties:
+            DefaultActions: 
+                - TargetGroupArn: !Ref LogsNLBTargetGroup
+                  Type: forward
+            LoadBalancerArn: !Ref NLB
+            Port: 443
+            Protocol: TCP
+            # if you want to check the connection through NLB to the instances, refer to the follwoing link
+            # https://dev.classmethod.jp/cloud/aws/aws-elb-ssh/
+            # https://qiita.com/okamu_/items/c051156e44c4fbd65234
+            # https://aws.amazon.com/jp/blogs/news/new-host-based-routing-support-for-aws-application-load-balancers/
+
+Outputs:
+    # NLBId:
+    #     Value: !Ref NLB
+    NLBFullName:
+        Value: !GetAtt NLB.LoadBalancerFullName
+    NLBCanonicalHostedZoneID:
+        Value: !GetAtt NLB.CanonicalHostedZoneID
+    NLBDNSName:
+        Value: !GetAtt NLB.DNSName
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-elasticloadbalancingv2-loadbalancer.html
+    NLBArn:
+        Value: !Ref NLB
+    NLBTargetGroupArn:
+        Value: !Ref LogsNLBTargetGroup
+    CheckURL: 
+        # Value: { "Fn::Join" : [ "", [ "http://", { "Fn::GetAtt" : [ "NLB", "DNSName" ]}, "/index.html"]]}
+        Value: !Join
+            - ''
+            - - "http://"
+              - !GetAtt NLB.DNSName
+              # - "/index.html"
+
+

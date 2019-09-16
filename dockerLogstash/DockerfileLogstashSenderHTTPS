@@ -1,0 +1,33 @@
+FROM ubuntu:latest
+WORKDIR /
+RUN set -x && apt-get update -y && apt-get upgrade -y && \
+	: "install packages" && \
+	apt-get install apt-utils curl wget nano iputils-ping net-tools -y && \
+	: "install filebeat https://www.elastic.co/guide/en/beats/filebeat/7.0/filebeat-installation.html" && \
+	curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.0.1-amd64.deb && \
+	dpkg -i filebeat-7.0.1-amd64.deb && \
+	: "download sample log file" && \
+	mkdir /home/download && wget https://download.elastic.co/demos/logstash/gettingstarted/logstash-tutorial.log.gz -P /home/download && gzip -d /home/download/logstash-tutorial.log.gz && \
+	: "duplicate the file content (https://unix.stackexchange.com/questions/284223/duplicate-the-content-of-a-file)" && \
+	mkdir /root/tmp && \
+	# cat /home/download/logstash-tutorial.log > /root/tmp/logstash-tutorial.log && cat /root/tmp/logstash-tutorial.log >> /home/download/logstash-tutorial.log && \
+	: "create filebeat.yml" && \
+	echo "filebeat.inputs:\n- type: log\n  paths:\n    - /home/download/logstash-tutorial.log\noutput.logstash:\n  hosts: [\"localhost:5044\"]" >> /usr/share/filebeat/bin/filebeat.yml && \
+	: "create a shell file calling filebeat.yml repetitively" && \
+	echo '#!/bin/sh -eu\nwhile true\ndo\n    # delete the cache file of filebeat if exists\n    if test -e /usr/share/filebeat/bin/data ; then\n        rm -rf /usr/share/filebeat/bin/data\n    fi\n    # change directory to filebeat.yml\n    cd /usr/share/filebeat/bin\n    # start filebeat in backend (= &)\n    ./filebeat -e -c filebeat.yml -d "publish" &\n    # get the process id of the last command\n    PID=$!\n    # wait for 4 seconds\n    sleep 4s\n    # stop filebeat\n    kill $PID\ndone' >> /usr/share/filebeat/bin/repeatFilebeat.sh && \
+	chmod 711 /usr/share/filebeat/bin/repeatFilebeat.sh && \
+	: "install packages for logstash" && \
+	apt-get install apt-transport-https software-properties-common -y && \
+	: "install java 11 https://qiita.com/zgmf_mbfp03/items/e86dd1f03f96d4aa5dd5 https://medium.freecodecamp.org/dockerfile-copy-vs-add-key-differences-and-best-practices-9570c4592e9e" && \
+	mkdir -p /opt/jdk/ && \
+	wget -P /opt/jdk/ https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz && \
+	tar -zxvf /opt/jdk/openjdk-11.0.2_linux-x64_bin.tar.gz -C /opt/jdk
+ENV PATH /opt/jdk/jdk-11.0.2/bin:$PATH
+RUN : "install logstash https://www.elastic.co/guide/en/logstash/current/installing-logstash.html" && \
+	wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | apt-key add - && \
+	echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | tee -a /etc/apt/sources.list.d/elastic-7.x.list && \
+	apt-get update && apt-get install logstash -y && mkdir -p /home/AWS/userInfo && \
+	echo 'input {\n  beats {\n    port => 5044\n  }\n}\nfilter {\n  ruby {\n    # https://discuss.elastic.co/t/how-can-i-get-the-hostname-of-linux-server-using-logstash/156480\n    init => "require '\''socket'\''"\n    code => "event.set('\''serverHostname'\'', Socket.gethostname)"\n  }\n}\noutput {\n  # stdout { codec => rubydebug }\n  # file { path => "/srv/logstash/filebeatLog-%{[host][name]}-%{[serverHostname]}-%{+YYYYMMddHHmm}.json" }\n  http {\n    http_method => "post"\n    # url or dns name to the destination\n    url => "https://W2fqlPdgw1yL5uceSC2C.jp.securitydoctorlogs.com:443"\n    cacert => "/home/AWS/userInfo/certificates/securitydoctorlogs-prod.crt"\n  }\n}'  >> /usr/share/logstash/logstash_downStream.conf
+CMD ["sh", "-c", "/usr/share/logstash/bin/logstash -f /usr/share/logstash/logstash_downStream.conf --config.reload.automatic & /usr/share/filebeat/bin/repeatFilebeat.sh"]
+
+# this does not work: CMD ["/usr/share/logstash/bin/logstash", "-f", "/usr/share/logstash/logstash_downStream.conf", "--config.reload.automatic", "&&", "/usr/share/filebeat/bin/repeatFilebeat.sh"]

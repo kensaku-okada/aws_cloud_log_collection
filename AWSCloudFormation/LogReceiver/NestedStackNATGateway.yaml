@@ -1,0 +1,100 @@
+# https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+AWSTemplateFormatVersion: '2010-09-09'
+Description: subnet nested stack template
+
+Parameters:
+    PublicSubnetForNATCidrBlock:
+        Type: String
+        Default: ''
+        Description: CIDR block for public subnet within the VPC
+    LogsPrivateRouteTableId:
+        Type: String
+        Default: ''
+
+Resources:
+    # Public subnte for NAT 
+    PublicSubnetForNAT:
+        # DependsOn: LogsVPC
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            CidrBlock: !Ref PublicSubnetForNATCidrBlock
+            AvailabilityZone:
+                Fn::Select:
+                    - '1'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            # - Key: Name
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PublicSubnetForNAT"
+    # Public Route Table for NAT
+    PublicRouteTableForNAT:
+        # DependsOn: LogsVPC
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            Tags:
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PublicRouteTableForNAT"
+    # association of public subnet and public route table
+    PublicSubnetARouteTableAssociationForNAT:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties: 
+          RouteTableId: !Ref PublicRouteTableForNAT
+          SubnetId: !Ref PublicSubnetForNAT
+    # Route of NAT Gateway (association of NAT with the route table)
+    # https://qiita.com/okubot55/items/23edb9ae97678fd5fad2
+    RouteToInternetGatewayForNatGateway:
+        # the following DependOn is necessary when creating this resource along with Internet Gateway.
+        # # https://stackoverflow.com/questions/48865762/cloudformation-error-route-table-x-and-network-gateway-y-belong-to-different-ne
+        # DependsOn:
+        #     - LogsInternetGateway
+        #     - VPCInternetGatewayAttachment
+        Type: AWS::EC2::Route
+        Properties:
+          RouteTableId: !Ref PublicRouteTableForNAT  
+          DestinationCidrBlock: 0.0.0.0/0
+          # NatGatewayId: !Ref NATGateway
+          GatewayId: !ImportValue LogsInternetGatewayId
+
+    #########################################################
+    # EIP for NAT gateway
+    # https://qiita.com/okubot55/items/23edb9ae97678fd5fad2
+    EIPForNATGateway: 
+        Type: AWS::EC2::EIP
+        Properties: 
+            Domain: vpc
+    # Nat Gateway
+    # https://qiita.com/okubot55/items/23edb9ae97678fd5fad2
+    NATGateway:
+        Type: AWS::EC2::NatGateway
+        Properties:
+            AllocationId: !GetAtt EIPForNATGateway.AllocationId 
+            SubnetId: !Ref PublicSubnetForNAT
+            Tags:
+                - Key: Name
+                  Value: !Sub "${AWS::StackName}-NATGateway"
+
+    # register the route to nat gateway for the route table for private subnet
+    RouteToNATGatewayForPrivateSubnetRouteTable:
+        Type: AWS::EC2::Route
+        Properties:
+          RouteTableId: !Ref LogsPrivateRouteTableId
+          DestinationCidrBlock: 0.0.0.0/0
+          NatGatewayId: !Ref NATGateway
+
+Outputs:
+    PublicSubnetForNATId:
+        Value: !Ref PublicSubnetForNAT
+        Export:
+            Name: PublicSubnetForNATId
+    PublicRouteTableForNATId:
+        Value: !Ref PublicRouteTableForNAT
+        Export:
+            Name: PublicRouteTableForNATId
+    NATGatewayId:
+        Value: !Ref NATGateway
+        Export:
+            Name: NATGatewayId

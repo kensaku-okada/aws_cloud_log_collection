@@ -1,0 +1,295 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: vpc nested stack template
+
+Parameters:
+    LogsVPCCidrBlock:
+        Type: String
+        Default: 10.1.0.0/16
+        Description: VPC CIDR Range
+    # http://www.security-next.com/074347
+    VPCFlowLogRetentionInDays:
+        Type: Number
+        Default: 400
+        Description: "unit: days"
+    EnvType:
+        Description: Environment type
+        Type: String
+        Default: dev
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test
+
+# source: http://awsinfra.site/2018/05/29/post-236/
+Resources:
+    ###################################################
+    ################# VPC and subnet start
+    ###################################################
+    # VPC
+    # how to configure the main route table -> https://aws.amazon.com/jp/premiumsupport/knowledge-center/cloudformation-route-table-vpc/
+    LogsVPC:
+        Type: AWS::EC2::VPC
+        Properties:
+            CidrBlock: !Ref LogsVPCCidrBlock
+            EnableDnsSupport: 'true'
+            EnableDnsHostnames: 'true'
+            InstanceTenancy: default
+            Tags:
+                - Key: vpcTagStackId
+                  Value: Ref 'AWS::StackId'
+                - Key: Name
+                  # this works
+                  # Value: !Join [ "-", [ "Ref":"AWS::StackId", !Sub "${AWS::StackName}" ] ]
+                  Value: !Sub "LogsVPC-${EnvType}"
+
+    # Public subnet for Internet gateway 
+    PublicSubnetForInternetGateway:
+        DependsOn: LogsVPC
+        Type: AWS::EC2::Subnet
+        Properties:
+            MapPublicIpOnLaunch: true
+            VpcId: !Ref LogsVPC
+            CidrBlock: 10.1.0.0/24
+            AvailabilityZone:
+                Fn::Select:
+                    - '1'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            # - Key: Name
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+            - Key: Name
+              Value: !Sub "PublicSubnetForInternetGateway-${EnvType}"
+    # Public Route Table for IGW
+    PublicRouteTableForInternetGateway:
+        DependsOn: LogsVPC
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !Ref LogsVPC
+            Tags:
+            - Key: Name
+              Value: !Sub "PublicRouteTableForInternetGateway-${EnvType}"
+    # association of public subnet and public route table
+    PublicSubnetARouteTableAssociationForIGW:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties: 
+          RouteTableId: !Ref PublicRouteTableForInternetGateway
+          SubnetId: !Ref PublicSubnetForInternetGateway
+    ###################################################
+    ################# VPC and subnet end
+    ###################################################
+
+    ###################################################
+    ################# Internet Gateway start 
+    ###################################################
+    # Internet Gateway
+    LogsInternetGateway:
+        DependsOn: LogsVPC
+        Type: AWS::EC2::InternetGateway
+        Properties:
+            Tags:
+                - Key: Name
+                  # Value: !Join [ "-", [ "Ref":"EnvType", "LogsInternetGateway" ] ]
+                  Value: !Sub "LogsInternetGateway-${EnvType}"
+
+    # attach Internet Gateway to VPC
+    VPCInternetGatewayAttachment:
+        Type: AWS::EC2::VPCGatewayAttachment
+        Properties:
+            VpcId: !Ref LogsVPC
+            InternetGatewayId: !Ref LogsInternetGateway
+
+    # associate the route table with Internet gateway
+    RouteToInternetGatewayForPublicSubnetRouteTable:
+        DependsOn: VPCInternetGatewayAttachment
+        Type: AWS::EC2::Route
+        Properties:
+            RouteTableId: !Ref PublicRouteTableForInternetGateway
+            DestinationCidrBlock: 0.0.0.0/0
+            GatewayId: !Ref LogsInternetGateway
+    ###################################################
+    ################# Internet Gateway end
+    ###################################################
+
+    ###################################################
+    ################# CloudWatch Logs start 
+    ###################################################
+
+    ################ VPC flow log start 
+    # Comment this out once you make the log group
+    # https://qiita.com/okubot55/items/8821b70408dd00c22dae
+    # https://dev.classmethod.jp/cloud/aws/introduce-to-vpc-flow-log/
+    VPCFlowLogs:
+        Type: AWS::EC2::FlowLog
+        Properties:
+            DeliverLogsPermissionArn: !ImportValue VPCFlowLogsRoleArn
+            # if you run this template file in other region than globalCommonStack, go to IAM management console and get the role ARN like below.
+            # DeliverLogsPermissionArn: arn:aws:iam::743311246584:role/VPCFlowLogsRole
+
+            LogGroupName: !Ref VPCFlowLogsLogGroup
+            # vpc id
+            ResourceId: !Ref LogsVPC
+            ResourceType: VPC
+            # get all kinds of traffic
+            TrafficType: ALL
+
+    VPCFlowLogsLogGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: LogsVPCFlowLogsGroup
+            RetentionInDays: !Ref VPCFlowLogRetentionInDays
+    ################ VPC flow log end
+
+    ###################################################
+    ################# CloudWatch Logs end
+    ###################################################
+
+    ###################################################
+    ################# CloudWatch Metrics start 
+    ###################################################
+
+    ###################################################
+    ################# CloudWatch Metrics end
+    ###################################################
+
+
+    ###################################################
+    ################# CloudWatch Events start 
+    ###################################################
+
+    ###################################################
+    ################# CloudWatch Events end
+    ###################################################
+
+
+    ###################################################
+    ################# Swcurity Group start 
+    ###################################################
+    SecurityGroupForPublicSubnetAndLoadBalancerDirectReceivers:
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-security-group-egress.html
+    # It would be impossible to use DestinationSecurityGroupId for more strictly restricting the source ec2 instance because this CommonResource stack is made before the securitygroup for public instances are made afterwards.
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: enable public access (ssh, https, Logstash access) 
+            VpcId : !Ref LogsVPC
+            SecurityGroupIngress:
+                # ssh port
+                - IpProtocol: tcp
+                  FromPort: 22
+                  ToPort: 22
+                  CidrIp: 0.0.0.0/0
+                # # http port
+                # - IpProtocol: tcp
+                #   FromPort: 80
+                #   ToPort: 80
+                #   CidrIp: 0.0.0.0/0
+                # https port
+                - IpProtocol: tcp
+                  FromPort: 443
+                  ToPort: 443
+                  CidrIp: 0.0.0.0/0
+                - IpProtocol: icmp
+                  FromPort: 8
+                  ToPort: -1
+                  CidrIp: 0.0.0.0/0
+                # # filebeat port (todo delete later)
+                # - IpProtocol: tcp
+                #   FromPort: 5000
+                #   ToPort: 5000
+                #   CidrIp: 0.0.0.0/0
+            Tags:
+                # name of the security group
+                - Key: Name
+                  Value: !Sub "SecurityGroupForLogReceiver-${EnvType}"
+
+    SecurityGroupForPrivateSubnetInstances:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: enable acceess only from the vpc
+            VpcId : !Ref LogsVPC
+            SecurityGroupIngress:
+                # ssh port (todo: disable this later )
+                # https://dev.classmethod.jp/etc/bastion-3way-rk/
+                - IpProtocol: tcp
+                  FromPort: 22
+                  ToPort: 22
+                  CidrIp: !Ref LogsVPCCidrBlock
+                  # CidrIp: 0.0.0.0/0
+                # https port
+                - IpProtocol: tcp
+                  FromPort: 443
+                  ToPort: 443
+                  # CidrIp: !Ref LogsVPCCidrBlock
+                  # see the ticket ID 1982687273 why it has to be 0.0.0.0/0 
+                  CidrIp: 0.0.0.0/0
+                - IpProtocol: icmp
+                  FromPort: 8
+                  ToPort: -1
+                  CidrIp: !Ref LogsVPCCidrBlock
+                  # CidrIp: 0.0.0.0/0
+
+            Tags:
+                # name of the security group
+                - Key: Name
+                  Value: !Sub "SecurityGroupForPrivateSubnetInstances-${EnvType}"
+
+    ###################################################
+    ################# Security Group end
+    ###################################################
+
+Outputs:
+    ########################################################
+    ####### VPC
+    ########################################################
+    LogsVPCId:
+        Value: !Ref LogsVPC
+        Export:
+            Name: LogsVPCId
+
+    ########################################################
+    ####### Internet Gateway 
+    ########################################################
+    LogsInternetGatewayId:
+        Value: !Ref LogsInternetGateway
+        Export:
+            Name: LogsInternetGatewayId
+
+    ########################################################
+    ####### Public subnet
+    ########################################################
+    PublicSubnetForInternetGatewayId:
+        Value: !Ref PublicSubnetForInternetGateway
+        Export:
+            Name: PublicSubnetForInternetGatewayId
+
+    ########################################################
+    ####### Route table and route
+    ########################################################
+    PublicRouteTableForInternetGatewayId:
+        Value: !Ref PublicRouteTableForInternetGateway
+        Export:
+            Name: PublicRouteTableForInternetGatewayId
+
+
+    ########################################################
+    ####### CloudWatch Logs
+    ########################################################
+    # VPCFlowLogsId:
+    #     Value: !Ref VPCFlowLogs
+    #     Export:
+    #         Name: VPCFlowLogsId
+
+    ########################################################
+    ####### Security group
+    ########################################################
+    SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers:
+        Description: security group for public instances
+        Value: !Ref SecurityGroupForPublicSubnetAndLoadBalancerDirectReceivers
+        Export:
+            Name: SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers
+
+    SecurityGroupIdForPrivateSubnetInstances:
+        Description: security group for private instances
+        Value: !Ref SecurityGroupForPrivateSubnetInstances
+        Export:
+            Name: SecurityGroupIdForPrivateSubnetInstances
+
+

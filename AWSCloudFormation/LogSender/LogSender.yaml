@@ -1,0 +1,324 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+    LogSenderEC2InstanceType:
+        Type: String
+        # Default: !ImportValue EC2InstanceType
+        Default: t3a.medium
+        Description: the instance spec type (e.g. t2.micro) of ec2 
+    LogSenderKeyName:
+        Type: AWS::EC2::KeyPair::KeyName
+        # Default: !ImportValue KeyName
+        # nvirginia
+        Default: kensaku_root_kensaku_admin_nvirginia
+        # oregon
+        # Default: kensaku_root_kensaku_admin_oregon
+        Description: names of an existing EC2 KeyPair
+
+    # SubnetId:
+    #     Type: String
+    #     Default: ""
+    # SecurityGroupId:
+    #     Type: AWS::EC2::SecurityGroup::Id
+    EnvType:
+        Description: Environment type
+        Default: dev
+        Type: String
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+
+Mappings:
+    # source: https://docs.aws.amazon.com/general/latest/gr/rande.html
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/gettingstarted.templatebasics.html
+    # the following AMI id may change by time. check the current id when running this file
+    RegionMap:
+        # nvirginia
+        us-east-1:
+            # ubuntu 18.04
+            AMIImageId: ami-024a64a6685d05041
+            # Amazon Linux 2
+            # AMIImageId: <check the newest id>
+        # oregon
+        us-west-2:
+            # ubuntu 18.04
+            AMIImageId: ami-0c579621aaac8bade
+        # # tokyo region
+        # ap-northeast-1:
+        #     # ubuntu 18.04
+        #     AMIImageId: <check the newest id>
+
+Resources:
+    ###########################################################
+    ########## ec2 spot instance ##########
+    ###########################################################
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-spotfleet.html#cfn-ec2-spotfleet-spotfleetrequestconfigdata
+    EC2SenderSpotInstance:
+        DependsOn:
+            - LaunchTemplateLogSender
+        Type: AWS::EC2::SpotFleet
+        Properties:
+            # https://dev.classmethod.jp/cloud/aws/tips-that-use-launchtemplate-with-cloudformation/
+            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-spotfleet-spotfleetrequestconfigdata.html
+            SpotFleetRequestConfigData:
+                AllocationStrategy: diversified
+                IamFleetRole: !ImportValue IAMEC2SpotFleetRoleArn
+                # # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-spotfleet-spotfleetrequestconfigdata-launchspecifications.html
+                # LaunchSpecifications:
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-spotfleet-spotfleetrequestconfigdata-launchspecifications.html
+                LaunchTemplateConfigs:
+                    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-spotfleet-fleetlaunchtemplatespecification.html
+                    - LaunchTemplateSpecification:
+                        # LaunchTemplateId: !ImportValue LaunchTemplateLogSenderId
+                        LaunchTemplateId: !Ref LaunchTemplateLogSender
+                        Version: 1
+
+                ReplaceUnhealthyInstances: true 
+                # SpotPrice: 
+                # the number of unit to request
+                TargetCapacity: 1
+                # スポットフリートリクエストが終了したときに、実行中のスポットインスタンスが終了するかどうか
+                TerminateInstancesWithExpiration: true
+
+    #####################################################################
+    ########## log sender ec2 instance Launch Template end ##########
+    #####################################################################
+
+    #####################################################################
+    ########## log sender ec2 instance Launch Template start ##########
+    #####################################################################
+
+    # https://dev.classmethod.jp/cloud/aws/tips-that-use-launchtemplate-with-cloudformation/
+    LaunchTemplateLogSender:
+        Type: AWS::EC2::LaunchTemplate
+        Properties:
+            LaunchTemplateName: !Sub "${AWS::StackName}-LogSender"
+            LaunchTemplateData:
+                ###### spot fleet specific params start ######
+                InstanceMarketOptions:
+                    MarketType: spot
+                ###### spot fleet specific params end ######
+                # ImageId: !Ref AMIImageId
+                ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMIImageId]
+                InstanceType: !Ref LogSenderEC2InstanceType
+                KeyName: !Ref LogSenderKeyName
+                EbsOptimized: true
+                BlockDeviceMappings:
+                    -
+                        DeviceName: "/dev/sda1"
+                        # DeviceName: "/dev/xvda"
+                        Ebs:
+                          # todo: check if you want to change the blockstorage mode (having mor io)
+                          VolumeType: "gp2"
+                          # VolumeType: "io1"
+                          # Iops: "200"
+                          DeleteOnTermination: true
+                          VolumeSize: 15
+
+                # https://stackoverflow.com/questions/53854184/cloudformation-launchtemplate-referencing-iaminstanceprofile-fails-to-create
+                IamInstanceProfile:
+                    Arn: !ImportValue IAMLogsSendLogInstanceProfileArn 
+
+                NetworkInterfaces:
+                    - AssociatePublicIpAddress: true
+                      DeleteOnTermination: true
+                      DeviceIndex: 0
+                      # list of the names of the scurity groups
+                      # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-ec2-network-iface-embedded.html
+                      Groups:
+                          - !ImportValue SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers 
+                      # subnet attached to this ec2 instance
+                      SubnetId: !ImportValue PublicSubnetForInternetGatewayId
+                Monitoring:
+                    Enabled: true
+                TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                  - Key: Name
+                    Value: !Sub "${AWS::StackName}-LogSender"
+
+                UserData:
+                  # git is installed by default. do not need install it by command
+                  # the following syntax did not work. The log said "/bin/bash: - : invalid option"
+                  # UserData: !Base64
+                  # bash としての変数展開の構文「${}」を含む場合、Fn::Sub の範囲外にこれを置く必要があるため、以下のようにJoinで分ける。
+                  Fn::Base64:
+                    Fn::Join:
+                    - "\n" # 連結文字。この場合、各要素を改行区切りで1つの文字列に連結
+                    - - Fn::Sub: # Fn::Sub としての変数展開が必要な部分。！ImportValueを使うためにFn::Sub の変数マップを「使う」パターン
+                        - |
+                            #!/bin/bash -xe
+                            export HOME=/root
+                            # env variable setting to install cfn-init packages and apt-get upgrade without manual interaction https://bugs.launchpad.net/ubuntu/+source/eglibc/+bug/935681
+                            export DEBIAN_FRONTEND=noninteractive
+
+                            apt-get -y update
+
+                            # change time zone
+                            #  timedatectl set-timezone Asia/Tokyo
+                            timedatectl set-timezone UCT
+
+                            ############################
+                            # install packages for cfn-init (https://gist.github.com/mmasko/66d34b651642525c63cd39251e0c2a8b)
+                            apt-get -y install python-setuptools
+                            mkdir -p /opt/aws/bin
+                            python /usr/lib/python2.7/dist-packages/easy_install.py --script-dir /opt/aws/bin https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+                            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-general.html
+                            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource LaunchTemplateLogSender --configsets setup --region ${AWS::Region} --role ${IamInstanceRole}
+                            ############################
+
+                            # install aws cli for endpoint connection
+                            apt-get install -y awscli
+
+                            # set the region: https://docs.aws.amazon.com/cli/latest/reference/configure/set.html
+                            aws configure set default.region ${AWS::Region}
+
+                            # the aws cloudformation variable used in the following commands. 
+                            envType=${EnvType}
+
+                        -
+                            IamInstanceRole:
+                              # https://medium.com/pablo-perez/how-do-i-import-a-stack-export-value-within-userdata-in-another-stack-9084b206897d
+                              # http://websitenotebook.blogspot.com/2017/06/importvalue-in-userdata-with-yaml.html
+                              Fn::ImportValue: IAMLogsSendLogRoleId
+                              # GitlabUserName:
+                              #     "{{resolve:ssm-secure:/${EnvType}/GitlabUserName:1}}"
+                              # GitlabPassword:
+                              #     "{{resolve:ssm-secure:/${EnvType}/GitlabPassword:1}}"
+
+                      - | # Fn::Sub としての変数展開が必要ない部分
+                        # install docker
+                        apt-get install docker.io -y
+
+                        # get the authentication info from AWS Systems Manager Parameter Store. There method only when assigning the parameters directly to properties.
+                        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/dynamic-references.html
+                        # https://docs.aws.amazon.com/ja_jp/systems-manager/latest/userguide/sysman-paramstore-walk-hierarchies.html
+
+                        # get the secret parameters from AWS Systems Manager
+                        # https://qiita.com/unhurried/items/c62d29540de3e10a50ad
+                        # https://docs.aws.amazon.com/ja_jp/cli/latest/userguide/cli-usage-output.html#cli-usage-output-filter
+                        apt-get install -y jq
+                        # https://qiita.com/Ping/items/57fd75465dfada76e633
+                        GitlabUserName=`aws ssm get-parameter --name "/${envType}/GitlabUserName" --with-decryption --query "Parameter.Value" --output text`
+                        GitlabPassword=`aws ssm get-parameter --name "/${envType}/GitlabPassword" --with-decryption --query "Parameter.Value" --output text`
+
+                        # register the user name and password to clone the repository
+                        # echo "https://`aws ssm get-parameter --name "/dev/GitlabUserName" --with-decryption --query "Parameter.Value"`:`aws ssm get-parameter --name "/dev/GitlabPassword" --with-decryption --query "Parameter.Value"`@gitlab.com" >> /root/.git-credentials
+                        echo "https://${GitlabUserName}:${GitlabPassword}@gitlab.com" >> /root/.git-credentials
+
+                        # clone the repository for Dockerfile
+                        git config --global credential.helper store
+                        # git clone https://gitlab.com/`aws ssm get-parameter --name "/dev/GitlabUserName" --with-decryption --query "Parameter.Value"`/_cloud_logs.git /home/ubuntu/logstashDocker
+                        git clone https://gitlab.com/${GitlabUserName}/_cloud_logs.git /home/ubuntu/logstashDocker
+
+                        # substitute login info and domain url to Dockerfile
+                        # sed -i "s/"your_access_key_id"/${AwsAccessKeyId}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+                        # sed -i "s/"your_secret_access_key"/${AwsSecretAccessKey}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+
+                        ############ watching memory and disk usage setting start ############
+                        # https://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/mon-scripts.html
+                        # https://qiita.com/mitsubachi/items/4b7e3449bbe04e403a9d
+                        # https://blog.mmmcorp.co.jp/blog/2018/05/19/cloudwatch_custom_metrics/
+                        apt-get update
+                        apt-get install unzip -y
+                        apt-get install libwww-perl libdatetime-perl -y
+                        # download and unzip the monitoring code
+                        curl https://aws-cloudwatch.s3.amazonaws.com/downloads/CloudWatchMonitoringScripts-1.2.2.zip -O
+                        unzip CloudWatchMonitoringScripts-1.2.2.zip
+                        rm CloudWatchMonitoringScripts-1.2.2.zip
+                        # cd aws-scripts-mon
+                        
+                        # set commands to crontab (https://stackoverflow.com/questions/37458287/how-to-run-a-cron-job-inside-a-docker-container https://qiita.com/yamikoo@github/items/64c7cd6f2918311a5b0c https://qiita.com/kkoito/items/28d9a453c425b08738d2)
+                        touch /var/log/cron.log
+                        mkdir -p /etc/cron.minutely
+                        echo "*/1 * * * * ~/aws-scripts-mon/mon-put-instance-data.pl --mem-util --mem-used-incl-cache-buff --mem-avail --disk-space-util --disk-path=/ --from-cron >> /var/log/cron.log 2>&1"  >> /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                        chmod 0644 /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                        # Apply cron job
+                        crontab /etc/cron.minutely/CloudWatchMetricsForMemoryAndDiskUsage
+                        ############ watching memory and disk usage setting end ############
+
+                        apt-get -y upgrade
+
+                        ########### HTTP connection container construction start ###########
+                        # change the access permission of Dockerfile
+                        # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTP
+                        # build the docker image
+                        # docker build -t logstash-receiver-http-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashSenderHTTP /home/ubuntu/logstashDocker/dockerLogstash
+                        # create the docker container
+                        # docker run -itd -p 80:80 logstash-receiver-http-ubuntu
+                        ########### HTTP connection container construction end ###########
+
+                        ########### HTTPS connection container construction start ###########
+                        # change the access permission of Dockerfile
+                        # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+                        # build the docker image
+                        docker build -t logstash-sender-https-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashSenderHTTPS /home/ubuntu/logstashDocker/dockerLogstash
+                        # create the docker container
+                        docker run -itd -p 443:443 -v /home/ubuntu/logstashDocker/userInfo:/home/AWS/userInfo logstash-sender-https-ubuntu
+                        ########### HTTPS connection container construction end ###########
+
+        Metadata:
+            # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-init.html
+            # https://gist.github.com/mmasko/66d34b651642525c63cd39251e0c2a8b
+            # https://github.com/awsdocs/aws-cloudformation-user-guide/blob/master/doc_source/aws-resource-init.md
+            AWS::CloudFormation::Init:
+                configSets:
+                    setup:
+                        - "configure_cfn"
+                configure_cfn:
+                    commands:
+                        test:
+                            command: echo "test CloudFormation::Init pacakage installed and tested" >> /root/cfn-init-test.txt
+
+    #####################################################################
+    ########## log sender ec2 instance Launch Template end ##########
+    #####################################################################
+
+Outputs:
+    EC2SenderSpotInstanceId:
+        Value: !Ref EC2SenderSpotInstance
+        Export:
+            Name: EC2SenderSpotInstanceId
+    ########################################################
+    ####### EC2 template 
+    ########################################################
+    LaunchTemplateLogSenderId:
+        Value: !Ref LaunchTemplateLogSender
+        Export:
+            Name: LaunchTemplateLogSenderId
+    LaunchTemplateLogSenderLatestVersionNumber:
+        Value: !GetAtt LaunchTemplateLogSender.LatestVersionNumber
+        Export:
+            Name: LaunchTemplateLogSenderLatestVersionNumber
+
+#################################################################
+##### reference about UserData syntax
+# Fn::Sub と Fn::Join の組み合わせとして、以下の例もご参考にしていただければと存じます。
+
+# ```
+# UserData:
+#   Fn::Base64:
+#     Fn::Join:
+#     - "\n" # 連結文字。この場合、各要素を改行区切りで1つの文字列に連結します
+#     - # 連結する各要素の配列
+#       - | # 連結する要素1つ目
+#         #!/bin/bash -xe
+#         yum -y update
+#         echo test > /root/test-echo
+#       - Fn::Sub: | # 連結する要素2つ目。 Fn::Sub の変数マップを「使わない」パターンです
+#           echo ${AWS::Region} > /root/test-region
+#           aws configure set default.region ${AWS::Region}
+#       - | # 連結する要素3つ目。 Fn::Sub の外なので bash として ${} を使えます
+#         MY_VARIABLE=`aws ssm get-parameter --name my-param --with-decryption --query Parameter.Value --output text`
+#         echo ${MY_VARIABLE} > /root/test-bash-variable
+#       - Fn::Sub: # 連結する要素4つ目。 Fn::Sub の変数マップを「使う」パターンです。使わないパターンと値の渡し方が違う点にご注意ください
+#         - | # Fn::Sub の変数マップを「使う」パターンでは配列の1つ目の要素に文字列が来ます
+#           echo "${MyVariable1}" > /root/test-imported1
+#           echo "${MyVariable2}" > /root/test-imported2
+#           echo "${AWS::StackName}" > /root/test-stackname
+#         - MyVariable1: # これが変数マップです
+#             Fn::ImportValue: ExportedValue1
+#           MyVariable2: !ImportValue ExportedValue2 # MyVariable2 のみ短縮形にしていますが、どちらの書き方でも問題ありません
+#       - echo test > /root/test-echo2 # 連結する要素5つ目
+#       - echo test > /root/test-echo3 # 連結する要素6つ目
+#       - | # 連結する要素7つ目
+#         echo test > /root/test-echo4
+#         echo test > /root/test-echo5

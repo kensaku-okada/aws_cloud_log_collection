@@ -1,0 +1,176 @@
+# https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+AWSTemplateFormatVersion: '2010-09-09'
+Description: subnet nested stack template
+
+Parameters:
+    PrivateSubnetACidrBlock:
+        Type: String
+        Default: ''
+        Description: CIDR block for subnet A within the VPC
+    PrivateSubnetBCidrBlock:
+        Type: String
+        Default: ''
+        Description: CIDR block for subnet B within the VPC
+    PublicSubnetAForLoadBalancerCidrBlock:
+        Type: String
+        Default: ''
+        Description: CIDR block for PublicSubnetA for LoadBalancer within the VPC
+    PublicSubnetBForLoadBalancerCidrBlock:
+        Type: String
+        Default: ''
+        Description: CIDR block for PublicSubnetB for LoadBalancer within the VPC
+
+########## virtual private cloud (VPC), subnet, route table, nat gateway, internet gateway start ##########
+# source: http://awsinfra.site/2018/05/29/post-236/
+Resources:
+    # private Route Table
+    LogsPrivateRouteTable:
+        Type: AWS::EC2::RouteTable
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            Tags:
+            # - Key: EnvType
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicRouteTableForNAT" ] ]
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PrivateRouteTable"
+
+    # Private Subnet A
+    PrivateSubnetA:
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            CidrBlock: !Ref PrivateSubnetACidrBlock
+            AvailabilityZone:
+                Fn::Select:
+                    - '0'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            # - Key: Name
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PrivateSubnetA"
+    PrivateSubnetARouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            SubnetId: !Ref PrivateSubnetA
+            RouteTableId: !Ref LogsPrivateRouteTable
+
+    # Private Subnet B
+    PrivateSubnetB:
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            CidrBlock: !Ref PrivateSubnetBCidrBlock
+            AvailabilityZone:
+                Fn::Select:
+                    - '2'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            # - Key: Name
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PrivateSubnetB"
+    PrivateSubnetBRouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            SubnetId: !Ref PrivateSubnetB
+            RouteTableId: !Ref LogsPrivateRouteTable
+
+    # https://aws.amazon.com/jp/premiumsupport/knowledge-center/public-load-balancer-private-ec2/
+    # Public Subnet A for loadbalancer 
+    PublicSubnetAForLoadBalancer:
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            CidrBlock: !Ref PublicSubnetAForLoadBalancerCidrBlock
+            AvailabilityZone:
+                Fn::Select:
+                    - '0'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            # - Key: Name
+            #   Value: !Join [ "-", [ "Ref":"EnvType", "PublicSubnetA" ] ]
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PublicSubnetAForLoadBalancer"
+    PublicSubnetAForLoadBalancerRouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            SubnetId: !Ref PublicSubnetAForLoadBalancer
+            RouteTableId: !ImportValue PublicRouteTableForInternetGatewayId
+
+
+    # Public Subnet B for loadbalancer
+    PublicSubnetBForLoadBalancer:
+        Type: AWS::EC2::Subnet
+        Properties:
+            VpcId: !ImportValue LogsVPCId
+            CidrBlock: !Ref PublicSubnetBForLoadBalancerCidrBlock
+            AvailabilityZone:
+                Fn::Select:
+                    - '2'
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+            Tags:
+            - Key: Name
+              Value: !Sub "${AWS::StackName}-PublicSubnetBForLoadBalancer"
+    PublicSubnetBForLoadBalancerRouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+            SubnetId: !Ref PublicSubnetBForLoadBalancer
+            RouteTableId: !ImportValue PublicRouteTableForInternetGatewayId
+
+    # ###################################################
+    # ################# VPC endpoint start
+    # ###################################################
+    # s3 endpoint
+    # https://qiita.com/okubot55/items/dc75d6cc07911ef7543e
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcendpoint.html
+    VPCS3Endpoint:
+        Type: AWS::EC2::VPCEndpoint
+        Properties:
+            RouteTableIds: 
+                - !Ref LogsPrivateRouteTable
+            ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+            VpcId: !ImportValue LogsVPCId
+    # ###################################################
+    # ################# VPC endpoint end
+    # ###################################################
+
+Outputs:
+    LogsPrivateRouteTableId:
+        Value: !Ref LogsPrivateRouteTable
+
+    PrivateSubnetAId:
+        Description: PrivateSubnetA id
+        Value: !Ref PrivateSubnetA
+    PrivateSubnetBId:
+        Description: PrivateSubnetB id
+        Value: !Ref PrivateSubnetB
+    PrivateSubnetIds:
+        Description: list of subnet ids
+        Value: !Join
+            - ","
+            - - !Ref PrivateSubnetA
+              - !Ref PrivateSubnetB
+
+    PublicSubnetAForLoadBalancerId:
+        Description: PublicSubnetAForLoadBalancer id
+        Value: !Ref PublicSubnetAForLoadBalancer
+    PublicSubnetBForLoadBalancerId:
+        Description: PublicSubnetBForLoadBalancer id
+        Value: !Ref PublicSubnetBForLoadBalancer
+    PublicSubnetForLoadBalancerIds:
+        Description: list of PublicSubnetForLoadBalancer ids
+        Value: !Join
+            - ","
+            - - !Ref PublicSubnetAForLoadBalancer
+              - !Ref PublicSubnetBForLoadBalancer              
+
+    VPCS3EndpointId:
+        Value: !Ref VPCS3Endpoint
+        
+
+

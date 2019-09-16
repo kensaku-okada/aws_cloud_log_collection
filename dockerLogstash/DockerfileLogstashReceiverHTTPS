@@ -1,0 +1,30 @@
+FROM ubuntu:latest
+WORKDIR /
+RUN set -x && apt-get update -y && apt-get upgrade -y && \
+	: "install packages" && \
+	apt-get install apt-utils apt-transport-https curl wget nano iputils-ping net-tools apt-transport-https software-properties-common iptables systemd -y && \
+	: "install java 11 https://qiita.com/zgmf_mbfp03/items/e86dd1f03f96d4aa5dd5 https://medium.freecodecamp.org/dockerfile-copy-vs-add-key-differences-and-best-practices-9570c4592e9e" && \
+	mkdir -p /opt/jdk/ && \
+	wget -P /opt/jdk/ https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz && \
+	tar -zxvf /opt/jdk/openjdk-11.0.2_linux-x64_bin.tar.gz -C /opt/jdk
+ENV PATH /opt/jdk/jdk-11.0.2/bin:$PATH
+RUN : "install logstash https://www.elastic.co/guide/en/logstash/current/installing-logstash.html" && \
+	wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | apt-key add - && \
+	echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | tee -a /etc/apt/sources.list.d/elastic-7.x.list && \
+	apt-get update && apt-get install logstash -y && mkdir -p /home/AWS/userInfo && \
+	echo 'input {\n  http {\n    port => 443\n    ssl => true\n    ssl_certificate => "/home/AWS/userInfo/certificates/securitydoctorlogs-prod.crt"\n    ssl_key => "/home/AWS/userInfo/privateKeys/securitydoctorlogs-prod.pem"\n  }\n}\nfilter {\n  ruby {\n    init => "require '\''socket'\''"\n    # https://discuss.elastic.co/t/how-can-i-set-current-time-in-field/157542 you can get the machine time by event.set('\''LogReceiverSystemTime'\'', Time.now())\n    code => "event.set('\''serverHostname'\'', Socket.gethostname);"\n  }\n}\noutput {\n  # stdout { codec => rubydebug }\n  # file { path => "/srv/logstash/filebeatLog-%{[host][name]}-%{[serverHostname]}-%{+YYYYMMddHHmm}.json" }\n  s3 {\n    region => "us-east-1"\n    bucket => "security-doctor-logs-temp-log-bucket"\n    encoding => "gzip"\n   # prefix => "%{[serverHostname]}/%{[CompanyNo]}/%{+YYYY}/%{+MM}/%{+dd}/%{+HH}/%{+mm}/%{[beat][hostname]}/"\n    rotation_strategy => "time"\n    time_file => 0.5\n    # endpoint => "http://security-doctor-logs-temp-log-bucket.amazonaws.com"\n    codec => "json_lines"\n    # access_key_id => "your_access_key_id"\n    # secret_access_key => "your_secret_access_key\n  }\n}'  >> /usr/share/logstash/logstash_downStream.conf && \
+	mkdir /srv/logstash && \
+	sed -i "s/-Xms1g/-Xms2g/" /etc/logstash/jvm.options && \
+	sed -i "s/-Xmx1g/-Xmx2g/" /etc/logstash/jvm.options 　
+	# : "make a user having a limited right (https://www.qoosky.io/techs/f38c112ca9, http://docs.docker.jp/v1.11/engine/reference/builder.html)" && \
+	# useradd SDLogsLogReceiverUser
+# USER SDLogsLogReceiverUser
+EXPOSE 443
+CMD ["/usr/share/logstash/bin/logstash", "-f", "/usr/share/logstash/logstash_downStream.conf", "--config.reload.automatic"]
+
+# /usr/share/logstash/bin/logstash -f /usr/share/logstash/logstash_downStream.conf --config.reload.automatic
+
+# docker build -t logstash-receiver-https-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS /home/ubuntu/logstashDocker/dockerLogstash
+
+# make container by "docker run --hostname=LogstashReceiverHttps -it -p 443:443 -v /home/ubuntu/logstashDocker/userInfo:/home/AWS/userInfo logstash-receiver-https-ubuntu"
+# make container by "docker run -it -p 443:443 -v /home/ubuntu/logstashDocker/userInfo:/home/AWS/userInfo logstash-receiver-https-ubuntu"

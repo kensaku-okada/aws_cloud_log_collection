@@ -1,0 +1,451 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+    KeyName:
+        Description: names of an existing EC2 KeyPair
+        Type: AWS::EC2::KeyPair::KeyName
+        Default: kensaku_root_kensaku_admin_nvirginia
+        # Default: "udemySample"
+    PublicSubnetForNATCidrBlock:
+        Type: String
+        Default: 10.1.1.0/24
+        Description: CIDR block for public subnet having NAT within the VPC
+    PrivateSubnetACidrBlock:
+        Type: String
+        Default: 10.1.2.0/24
+        Description: CIDR block for PublicSubnetA within the VPC
+    PrivateSubnetBCidrBlock:
+        Type: String
+        Default: 10.1.3.0/24
+        Description: CIDR block for PublicSubnetB within the VPC
+    PublicSubnetAForLoadBalancerCidrBlock:
+        Type: String
+        Default: 10.1.4.0/24
+        Description: CIDR block for PublicSubnetA for LoadBalancer within the VPC
+    PublicSubnetBForLoadBalancerCidrBlock:
+        Type: String
+        Default: 10.1.5.0/24
+        Description: CIDR block for PublicSubnetB for LoadBalancer within the VPC
+
+    EC2InstanceType:
+        Type: String
+        Default: t3a.medium
+        Description: the instance spec type (e.g. t2.micro) of ec2 
+    InstanceVolumeSize:
+        Type: Number
+        Default: 15
+        Description: Unit = GB
+
+    ###### parameters for autoscaling ######
+    DesiredCapacity:
+        Type: Number
+        Default: 2
+    MaxSize:
+        Type: Number
+        Default: 8
+    MinSize:
+        Type: Number
+        Default: 2
+    MaxBatchSize:
+        Type: Number
+        Default: 1
+        Description: AutoScalingRollingUpdate MaxBatchSize
+    # MinInstancesInService:
+    #     Type: Number
+    #     Default: 2
+    #     Description: AutoScalingRollingUpdate MinInstancesInService
+
+    ###### other parameters ######
+    EnvType:
+        Description: Environment type
+        Type: String
+        Default: dev
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+    OperatorEMail:
+        Description: "EMail address to notify if there are any scaling operations"
+        Type: String
+        Default: kensaku.okada@gmail.com
+        AllowedPattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+.[a-zA-Z0-9-.]+$"
+        ConstraintDescription: must be a valid email address.
+
+
+# configuration of the appearance of parameter setting at AWS mangement console
+# https://dev.classmethod.jp/cloud/aws/cfn-parameter-organization-on-aws-management-console/
+# https://medium.com/slalom-technology/how-to-make-friendly-parameters-for-the-cloudformation-console-f546ffdbeace
+Metadata:
+    AWS::CloudFormation::Interface:
+        ParameterGroups:
+            - Label:
+                default: "VPC Network Parameters"
+              Parameters:
+                    - PublicSubnetForNATCidrBlock
+                    - PrivateSubnetACidrBlock
+                    - PrivateSubnetBCidrBlock
+                    - PublicSubnetAForLoadBalancerCidrBlock
+                    - PublicSubnetBForLoadBalancerCidrBlock
+            - Label:
+                default: "EC2 Instance Parameters"
+              Parameters:
+                    - EC2InstanceType
+                    - InstanceVolumeSize
+            # - Label:
+            #     default: "Secret Parameters"
+            #   Parameters:
+            #         - KeyName
+            #         - LogReceiverGitlabUserName
+            #         - LogReceiverGitlabPassword
+            #         - AwsAccessKeyId
+            #         - AwsSecretAccessKey
+            - Label:
+                default: "Autoscaling Parameters"
+              Parameters:
+                    - DesiredCapacity
+                    - MaxSize
+                    - MinSize
+                    - MaxBatchSize
+                    # - MinInstancesInService
+            - Label:
+                default: "Other Parameters"
+              Parameters:
+                    - KeyName
+                    - EnvType
+                    - OperatorEMail
+
+Mappings:
+    # source: https://docs.aws.amazon.com/general/latest/gr/rande.html
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/gettingstarted.templatebasics.html
+    # the following AMI id may change by time. check the current id when running this file
+    RegionMap:
+        # nvirginia
+        us-east-1:
+            # ubuntu 18.04
+            AMIImageId: ami-024a64a6685d05041
+            # Amazon Linux 2
+            # AMIImageId: <check the newest id>
+        # oregon
+        us-west-2:
+            # ubuntu 18.04
+            AMIImageId: ami-0c579621aaac8bade
+        # # tokyo region
+        # ap-northeast-1:
+        #     # ubuntu 18.04
+        #     AMIImageId: <check the newest id>
+
+Resources:
+    #########################################
+    ########## Nested Stacks start ##########
+    #########################################
+    # subnets
+    LogsSubnetStack:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            # this does not work. currently its impossible to insert parameters to the url
+            TemplateURL: !Sub
+              - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackSubnet.yaml
+              - { EnvType: !Ref EnvType}
+            Parameters:
+                PrivateSubnetACidrBlock: !Ref PrivateSubnetACidrBlock
+                PrivateSubnetBCidrBlock: !Ref PrivateSubnetBCidrBlock
+                PublicSubnetAForLoadBalancerCidrBlock: !Ref PublicSubnetAForLoadBalancerCidrBlock
+                PublicSubnetBForLoadBalancerCidrBlock: !Ref PublicSubnetBForLoadBalancerCidrBlock
+            TimeoutInMinutes: 5
+
+    # NAT gateway
+    LogsNatGateway:
+        DependsOn: LogsSubnetStack
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: !Sub
+              - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackNATGateway.yaml
+              - { EnvType: !Ref EnvType}
+            Parameters:
+                PublicSubnetForNATCidrBlock: !Ref PublicSubnetForNATCidrBlock
+                LogsPrivateRouteTableId: !GetAtt LogsSubnetStack.Outputs.LogsPrivateRouteTableId
+            TimeoutInMinutes: 5
+
+    # EC2 templates
+    LogsEC2template:
+        DependsOn: LogsSubnetStack
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: !Sub
+              - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackEC2Template.yaml
+              - { EnvType: !Ref EnvType}
+            Parameters:
+                KeyName: !Ref KeyName
+                EnvType: !Ref EnvType
+            TimeoutInMinutes: 3
+
+    # # EC2 Instances
+    # LogsEC2InstanceLogReceiver1Stack:
+    #     Type: AWS::CloudFormation::Stack
+    #     Properties:
+    #         TemplateURL: !Sub
+    #           - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackEC2.yaml
+    #           - { EnvType: !Ref EnvType}
+    #         Parameters:
+    #             KeyName: !Ref KeyName 
+    #             EC2InstanceType: !Ref EC2InstanceType
+    #             SubnetId: !GetAtt LogsSubnetStack.Outputs.PrivateSubnetAId
+    #             # SecurityGroupId: !ImportValue SecurityGroupIdForPrivateSubnetInstances
+    #             SecurityGroupId: !ImportValue SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers
+    #             InstanceVolumeSize: !Ref InstanceVolumeSize
+    #             # IamInstanceProfile: !ImportValue IAMS3TempLogAccessFromLogstashProfileId
+    #             IamInstanceProfile: !ImportValue IAMS3FullAccessInstanceProfileId
+    #             IamInstanceRole: !ImportValue IAMS3FullAccessRoleId
+    #             EnvType: !Ref EnvType
+    #             GitlabUserName: !Ref LogReceiverGitlabUserName
+    #             GitlabPassword: !Ref LogReceiverGitlabPassword
+    #             AwsAccessKeyId: !Ref AwsAccessKeyId
+    #             AwsSecretAccessKey: !Ref AwsSecretAccessKey
+    #         TimeoutInMinutes: 5
+    # LogsEC2InstanceLogReceiver2Stack:
+    #     Type: AWS::CloudFormation::Stack
+    #     Properties:
+    #         TemplateURL: !Sub
+    #           - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackEC2.yaml
+    #           - { EnvType: !Ref EnvType}
+    #         Parameters:
+    #             KeyName: !Ref KeyName
+    #             EC2InstanceType: !Ref EC2InstanceType
+    #             SubnetId: !GetAtt LogsSubnetStack.Outputs.PrivateSubnetBId
+    #             # SecurityGroupId: !ImportValue SecurityGroupIdForPrivateSubnetInstances
+    #             SecurityGroupId: !ImportValue SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers
+    #             InstanceVolumeSize: !Ref InstanceVolumeSize
+    #             # IamInstanceProfile: !ImportValue IAMS3TempLogAccessFromLogstashProfileId
+    #             IamInstanceProfile: !ImportValue IAMS3FullAccessInstanceProfileId
+    #             IamInstanceRole: !ImportValue IAMS3FullAccessRoleId
+    #             EnvType: !Ref EnvType
+    #             GitlabUserName: !Ref LogReceiverGitlabUserName
+    #             GitlabPassword: !Ref LogReceiverGitlabPassword
+    #             AwsAccessKeyId: !Ref AwsAccessKeyId
+    #             AwsSecretAccessKey: !Ref AwsSecretAccessKey
+    #         TimeoutInMinutes: 5
+
+    # load balancer
+    # LogsApplicationLoadBalancerStack:
+    #     Type: AWS::CloudFormation::Stack
+    #     Properties:
+    #         TemplateURL: https://nestedstacksbucket.s3.amazonaws.com/NestedStackApplicationLoadBalancer.yaml
+    #         Parameters:
+    #             LogsVPCId: !GetAtt LogsVPCStack.Outputs.LogsVPCId
+    #             PublicSubnetAId: !GetAtt LogsVPCStack.Outputs.PublicSubnetAId
+    #             PublicSubnetBId: !GetAtt LogsVPCStack.Outputs.PublicSubnetBId
+    #             EC2InstanceLogReceiver1: !Ref EC2InstanceLogReceiver1
+    #             EC2InstanceLogReceiver2: !Ref EC2InstanceLogReceiver2
+    #             ALBSecurityGroupId: !GetAtt LogsSecurityGroupStack.Outputs.SecurityGroupIdForLogReceiver
+    #             S3BucketNameForALBLog: !Ref S3BucketNameForLoadBalancerLog
+    #             EnvType: !Ref EnvType
+    #         TimeoutInMinutes: 5
+    LogsNetworkLoadBalancerStack:
+        Type: AWS::CloudFormation::Stack
+        Properties:
+            TemplateURL: !Sub
+              - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackNetworkLoadBalancer.yaml
+              - { EnvType: !Ref EnvType}
+            Parameters:
+                LogsVPCId: !ImportValue LogsVPCId
+                SubnetAId: !GetAtt LogsSubnetStack.Outputs.PublicSubnetAForLoadBalancerId
+                SubnetBId: !GetAtt LogsSubnetStack.Outputs.PublicSubnetBForLoadBalancerId
+                ###############################
+                # # comment out the following ex2Instance stacks when activating autoscaling
+                # EC2InstanceLogReceiver1: !GetAtt LogsEC2InstanceLogReceiver1Stack.Outputs.EC2InstanceLogReceiverId
+                # EC2InstanceLogReceiver2: !GetAtt LogsEC2InstanceLogReceiver2Stack.Outputs.EC2InstanceLogReceiverId
+                ###############################
+                # NLBSecurityGroupId: !GetAtt LogsSecurityGroupStack.Outputs.SecurityGroupIdForLogReceiver
+                NLBSecurityGroupId: !ImportValue SecurityGroupIdForPublicSubnetAndLoadBalancerDirectReceivers 
+                EnvType: !Ref EnvType
+            TimeoutInMinutes: 10
+
+    # route 53
+    ##################################################################################################################################
+    ##### Since many connection malfunction due to the delay of DNS server update, Route 53 configuration was eliminated from Cloudformation
+    ##################################################################################################################################
+    # LogsRoute53Stack:
+    #     Type: AWS::CloudFormation::Stack
+    #     DependsOn: LogsNetworkLoadBalancerStack
+    #     Properties:
+    #         TemplateURL: https://nestedstacksbucket.s3.amazonaws.com/LogsLogReceiver/NestedStackRoute53.yaml
+    #         Parameters:
+    #             LoadBalancerFullName: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBFullName
+    #             LoadBalancerCanonicalHostedZoneID: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBCanonicalHostedZoneID
+    #             LoadBalancerDnsName: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBDNSName
+    #             DomainName: <your domain name>
+    #             SubDomainName: <your subdomain name>
+    #             EnvType: !Ref EnvType
+    #         TimeoutInMinutes: 5
+
+    # autoscaling
+    LogsAutoScalingStack:
+        Type: AWS::CloudFormation::Stack
+        DependsOn: LogsNetworkLoadBalancerStack
+        Properties:
+            TemplateURL: !Sub
+              - https://logs-cfn-templates-${EnvType}.s3.amazonaws.com/LogsLogReceiver/NestedStackAutoScaling.yaml
+              - { EnvType: !Ref EnvType}
+            Parameters:
+                KeyName: !Ref KeyName
+                # EC2InstanceType: !Ref EC2InstanceType
+                SubnetIds: !GetAtt LogsSubnetStack.Outputs.PrivateSubnetIds
+                LaunchTemplateId: !GetAtt LogsEC2template.Outputs.LaunchTemplateLogReceiverId
+                templateVersion: !GetAtt LogsEC2template.Outputs.LaunchTemplateLogReceiverLatestNumber 
+                # SecurityGroupIdForAutoScaling: !ImportValue SecurityGroupIdForPrivateSubnetInstances
+                NonClassicELBTargetGroupArn: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBTargetGroupArn
+                # IamInstanceProfile: !ImportValue IAMS3TempLogAccessFromLogstashProfileId
+                # AMIImageId: !FindInMap
+                #         - RegionMap
+                #         - !Ref 'AWS::Region'
+                #         - AMIImageId
+                EnvType: !Ref EnvType
+                # GitlabUserName: !Ref LogReceiverGitlabUserName
+                # GitlabPassword: !Ref LogReceiverGitlabPassword
+                # AwsAccessKeyId: !ref AwsAccessKeyId
+                # AwsSecretAccessKey: !ref AwsSecretAccessKey
+                DesiredCapacity: !Ref DesiredCapacity
+                MaxSize: !Ref MaxSize
+                MinSize: !Ref MinSize
+                MaxBatchSize: !Ref MaxBatchSize
+                # MinInstancesInService: !Ref MinInstancesInService
+                OperatorEMail: !Ref OperatorEMail
+            TimeoutInMinutes: 10
+
+    #########################################
+    ########## Nested Stacks end ##########
+    #########################################
+
+
+    ########## Database start ##########
+
+    # myDB:
+    #     Type: AWS::RDS::DBInstance
+    #     Properties:
+    #         AllocatedStorage: '5'
+    #         DBInstanceClass: db.t2.small
+    #         Engine: MySQL
+    #         EngineVersion: '5.7'
+    #         MasterUsername: MyName
+    #         MasterUserPassword: MyPassword
+
+    ########## Database end ##########
+
+    ########## CloudWatch start ##########
+    # # https://dev.classmethod.jp/cloud/aws/cloudwatch-dashboard-cfn/
+    # CloudwatchDashboard:
+    #     Type: AWS::CloudWatch::Dashboard
+    #         Properties:
+    #             DashboardBody: !Sub |
+    ########## CloudWatch end ##########
+
+
+Outputs:
+    ########################################################
+    ####### Parameters start
+    ########################################################
+
+    ###### secret parameters
+    EnvType:
+        Value: !Ref EnvType
+        # Export:
+        #     Name: EnvType
+    DesiredCapacity:
+        Value: !Ref DesiredCapacity
+        # Export:
+        #     Name: DesiredCapacity
+    MaxSize:
+        Value: !Ref MaxSize
+        # Export:
+        #     Name: MaxSize
+    MinSize:
+        Value: !Ref MinSize
+        # Export:
+        #     Name: MinSize
+    MaxBatchSize:
+        Value: !Ref MaxBatchSize
+        # Export:
+        #     Name: MaxBatchSize
+    # MinInstancesInService:
+    #     Value: !Ref MinInstancesInService
+    #     Export:
+    #         Name: MinInstancesInService
+    # the email address receiving notification for autoscaling
+    OperatorEMail:
+        Value: !Ref OperatorEMail
+        # Export:
+        #     Name: OperatorEMail
+    KeyName:
+        Value: !Ref KeyName
+        # Export:
+        #     Name: KeyName
+    EC2InstanceType:
+        Value: !Ref EC2InstanceType
+        # Export:
+        #     Name: EC2InstanceType
+    InstanceVolumeSize:
+        Value: !Ref InstanceVolumeSize
+        # Export:
+        #     Name: InstanceVolumeSize
+
+
+    ########################################################
+    ####### Parameters end
+    ########################################################
+
+    awsRegionId:
+        Description: The AWS Region ID your template was launched in
+        Value:
+            Ref: AWS::Region
+    # WebUrlToInstanceLogReceiver1:
+    #     Description: our server url
+    #     # Value: !Join
+    #     #     - '' # delimiter
+    #     #     - - 'http://'
+    #     #       - !GetAtt 
+    #     #         - EC2InstanceLogReceiver1
+    #     #         - PublicDnsName
+    #     Value: !Join
+    #         - '' # delimiter
+    #         - - 'https://'
+    #           - !GetAtt LogsEC2InstanceLogReceiver1Stack.Outputs.PublicDnsName
+    WebUrlToLoadBalancer:
+        Value: !Join
+            - '' # delimiter
+            - - 'https://'
+              - !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBDNSName
+
+    ######### exported outputs #######
+    StackPrivateSubnetA:
+        Description: The ID of a VPC Subnet
+        Value: !GetAtt  LogsSubnetStack.Outputs.PrivateSubnetAId
+        # Export:
+        #     Name: StackPrivateSubnetA
+    StackPrivateSubnetB:
+        Description: The ID of the VPC Subnet
+        Value: !GetAtt  LogsSubnetStack.Outputs.PrivateSubnetAId
+        # Export:
+        #     Name: StackPrivateSubnetB
+    # StackApplicationLoadBalancer:
+    #     Description: The dns name of the ALB
+    #     Value: !GetAtt LogsApplicationLoadBalancerStack.Outputs.ALBDNSName
+    StackNetworkLoadBalancer:
+        Description: The dns name of the NLB
+        Value: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBDNSName
+        # Export:
+        #     Name: NetworkLoadBalancer
+    PrivateSubnetIds:
+        Value: !GetAtt LogsSubnetStack.Outputs.PrivateSubnetIds
+        # Export:
+        #     Name: PrivateSubnetIds
+    NonClassicELBTargetGroupArn:
+        Value: !GetAtt LogsNetworkLoadBalancerStack.Outputs.NLBTargetGroupArn
+        # Export:
+        #     Name: NonClassicELBTargetGroupArn
+    # the image id of the original AMI from AWS
+    AMIImageId:
+        Value: !FindInMap
+            - RegionMap
+            - !Ref 'AWS::Region'
+            - AMIImageId
+        # Export:
+        #     Name: AMIImageId
+
+

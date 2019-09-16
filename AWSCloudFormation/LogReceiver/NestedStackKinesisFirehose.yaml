@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: template file creating aws kinesis data firehose pipeline
+
+Parameters:
+    EnvType:
+        Description: Environment type
+        Type: String
+        Default: dev
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test
+
+Resources:
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-kinesisfirehose-deliverystream-s3destinationconfiguration.html
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-kinesisfirehose-deliverystream.html#cfn-kinesisfirehose-deliverystream-deliverystreamtype
+    # https://gist.github.com/lizturp/33d202470eb95980b33cbdf16e2ea465
+    LogsLogReceiverKinesisDataFirehose:
+        Type: AWS::KinesisFirehose::DeliveryStream
+        Properties:
+            DeliveryStreamName: !Sub "LogReceiverKinesisDataFirehose-${EnvType}" 
+            DeliveryStreamType: DirectPut
+            # ExtendedS3DestinationConfiguration:
+            S3DestinationConfiguration:
+                BucketARN: !ImportValue S3BucketForTempLogArn  
+                BufferingHints:
+                    IntervalInSeconds: 60
+                    SizeInMBs: 64
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-kinesisfirehose-deliverystream-cloudwatchloggingoptions.html
+                CloudWatchLoggingOptions:
+                    Enabled: true
+                    LogGroupName: LogsLogReceiverLoggingGroup
+                    LogStreamName: KinesisDataFirehoseLog
+                # https://docs.aws.amazon.com/firehose/latest/APIReference/API_S3DestinationConfiguration.html
+                CompressionFormat: GZIP
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-kinesisfirehose-deliverystream-encryptionconfiguration.html
+                # todo
+                # EncryptionConfiguration:
+                #     KMSEncryptionConfig:  
+                Prefix: "/"
+                # https://docs.aws.amazon.com/ja_jp/firehose/latest/dev/controlling-access.html#using-iam-s3
+                RoleARN: !ImportValue IAMFirehoseDeliveryAndLoggingRoleArn
+
+Outputs:
+    LogsLogReceiverKinesisDataFirehoseId:
+        Value: !Ref LogsLogReceiverKinesisDataFirehose
+        Export:
+            Name: LogsLogReceiverKinesisDataFirehoseId
+

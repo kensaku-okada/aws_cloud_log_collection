@@ -1,0 +1,41 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: template file creating S3 bucket for cloudformation templates
+Parameters:
+#     KeyName:
+#         Description: names of an existing EC2 KeyPair
+#         Type: AWS::EC2::KeyPair::KeyName
+    EnvType:
+        Description: Environment type
+        Default: dev
+        Type: String
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+
+Resources:
+    ########## s3 start ##########
+    S3BucketForCfnTemplateFiles:
+        Type: AWS::S3::Bucket
+        Properties:
+            BucketName: !Sub logs-cfn-templates-${EnvType}
+            AccessControl: Private
+            # AccessControl: PublicRead
+            # versioning
+            VersioningConfiguration:
+                  # Status: Enabled
+                  Status: Suspended
+            # public accessibility
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+                # BlockPublicAcls: False
+                # BlockPublicPolicy: False
+                # IgnorePublicAcls: False
+                # RestrictPublicBuckets: False
+    ########## s3 end ##########
+Outputs:
+    S3BucketForCfnTemplateFilesId:
+        Value: !Ref S3BucketForCfnTemplateFiles
+        Export:
+            Name: S3BucketForCfnTemplateFilesId

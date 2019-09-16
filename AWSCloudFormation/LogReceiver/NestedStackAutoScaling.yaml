@@ -1,0 +1,426 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: template file creating auto-scaling configuration. 
+
+Parameters:
+    KeyName:
+        Description: names of an existing EC2 KeyPair
+        Type: AWS::EC2::KeyPair::KeyName
+    # EC2InstanceType:
+    #     Type: String
+    #     Default: t3a.medium
+    #     Description: the instance spec type (e.g. t2.micro) of ec2 
+    SubnetIds:
+        Type: String
+        # https://medium.com/@garrett.d.sweeney/using-cloudformation-to-build-aws-autoscalinggroups-f136d70caf8d
+        # Type: List<AWS::EC2::Subnet::Id>
+        Default: ""
+        Description: the subnetid where creating instances for auto-scaling
+    LaunchTemplateId:
+        Type: String
+    templateVersion: 
+        Type: String
+    # SecurityGroupIdForAutoScaling:
+    #     Type: AWS::EC2::SecurityGroup::Id
+    # InstanceVolumeSize:
+    #     Type: Number
+    #     Default: 15
+    #     Description: Unit = GB
+    # IamInstanceProfile:
+    #     Type: String
+    #     Default: ''
+    NonClassicELBTargetGroupArn:
+        Type: String
+        Default: ''
+        Description: Auto Scaling グループに関連付けられるターゲットグループの Amazon Resource Names (ARN)。 
+    # IamInstanceProfile:
+    #     Type: String
+    #     Default: ''
+    # AMIImageId:
+    #     Type: String
+    #     Default: ami-003fd78ccad66df96
+    #     Description: the Image Id of ec2 instance for auto scaling
+    EnvType:
+        Description: Environment type
+        Default: dev
+        Type: String
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test.
+    # GitlabUserName:
+    #     Type: String      
+    # GitlabPassword:
+    #     Type: String      
+    # AWS_ACCESS_KEY_ID:
+    #     Type: String      
+    # AWS_SECRET_ACCESS_KEY:
+    #     Type: String      
+
+    DesiredCapacity:
+        Type: Number
+        Default: 2
+    MaxSize:
+        Type: Number
+        Default: 8
+    MinSize:
+        Type: Number
+        Default: 2
+    MaxBatchSize:
+        Type: Number
+        Default: 1
+        Description: AutoScalingRollingUpdate MaxBatchSize
+    # MinInstancesInService:
+    #     Type: Number
+    #     Default: 2
+    #     Description: AutoScalingRollingUpdate MinInstancesInService
+    OperatorEMail:
+        Description: "EMail address to notify if there are any scaling operations"
+        Type: String
+        Default: kensaku.okada@gmail.com
+        # https://github.com/sjparkinson/cloudformation-ansible-example/blob/master/cloudformation/cloudformation-default.json
+        AllowedPattern: "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+.[a-zA-Z0-9-.]+$"
+        ConstraintDescription: must be a valid email address.
+
+# https://qiita.com/cs_sonar/items/a169539252b3b57ff71d
+Resources:
+
+    # https://github.com/awsdocs/aws-cloudformation-user-guide/blob/master/doc_source/example-templates-autoscaling.md
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-sns-topic.html
+    LogsLogReceiverNotificationTopic:
+        Type: AWS::SNS::Topic
+        Properties:
+            Subscription:
+                -
+                    # Endpoint: !Ref OperatorEMail
+                    Endpoint: !Ref OperatorEMail
+                    Protocol: email
+
+    # # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-autoscaling.html
+    # # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-as-launchconfig.html
+    # # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-as-launchconfig.html
+    # LaunchConfiguration:
+    #     Type: AWS::AutoScaling::LaunchConfiguration
+    #     Properties:
+    #         #################################################
+    #         # todo: after making nat gateway to access the web from private subnet, make this false 
+    #         # https://dev.classmethod.jp/etc/bastion-3way-rk/
+    #         # AssociatePublicIpAddress: true
+    #         AssociatePublicIpAddress: false
+    #         #################################################
+    #         # https://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/device_naming.html
+    #         BlockDeviceMappings:        
+    #             - DeviceName: "/dev/sda1"
+    #               Ebs:
+    #                 # VolumeSize: !Ref InstanceVolumeSize
+    #                 VolumeSize: !Ref InstanceVolumeSize
+    #                 VolumeType: "gp2"
+    #                 DeleteOnTermination: true
+
+    #         # https://aws.amazon.com/jp/ec2/pricing/on-demand/
+    #         # 現行世代のインスタンスタイプの場合、EBS 最適化はデフォルトで有効になっており、追加料金は発生しません。旧世代のインスタンスタイプの場合、EBS 最適化の料金は旧世代の料金ページに記載されています。
+    #         EbsOptimized: true
+
+    #         # IAM role
+    #         # IamInstanceProfile: !Ref IamInstanceProfile
+    #         IamInstanceProfile: !Ref IamInstanceProfile
+
+    #         # AMI image id
+    #         # ImageId: !Ref AMIImageId
+    #         ImageId: !Ref AMIImageId
+
+    #         # インスタンスの詳細モニタリングが Auto Scaling グループに対して有効であるかを示します。デフォルトでは、このプロパティは true (有効) に設定されています。
+    #         InstanceMonitoring: true
+
+    #         # InstanceType: !Ref EC2InstanceType 
+    #         InstanceType: !Ref EC2InstanceType 
+
+    #         # name of key-pair for ssh access
+    #         KeyName: !Ref KeyName
+
+    #         # Type: セキュリティグループのリスト。
+    #         SecurityGroups:
+    #             - !Ref SecurityGroupIdForAutoScaling
+
+    #         # this should be same as the default ec2 instance.
+    #         UserData:
+    #             Fn::Base64: !Sub | # Sub = 'Substitute'. the pipe indicates you do not require back slash for escaping special chars.
+    #                     #!/bin/bash -xe
+    #                     export HOME=/root && \
+    #                     apt-get update -y && \
+    #                     # apt-get -y upgrade && \
+
+    #                     # change time zone
+    #                     timedatectl set-timezone Asia/Tokyo
+
+    #                     # install packages for cfn-init (https://gist.github.com/mmasko/66d34b651642525c63cd39251e0c2a8b)
+    #                     apt-get -y install python-setuptools
+    #                     mkdir -p /opt/aws/bin
+    #                     python /usr/lib/python2.7/dist-packages/easy_install.py --script-dir /opt/aws/bin https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+    #                     # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-general.html
+    #                     # /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2InstanceLogReceiver --configsets setup --region ${AWS::Region}
+    #                     # /opt/aws/bin/cfn-signal -e --stack ${AWS::StackName} --resource EC2InstanceLogReceiver --configsets setup --region ${AWS::Region}
+
+    #                     # install docker
+    #                     apt-get install docker.io -y && \
+
+    #                     git config --global credential.helper store
+    #                     # register the user name and password to clone the repository
+    #                     echo 'https://${GitlabUserName}:${GitlabPassword}@gitlab.com' >> /root/.git-credentials
+
+    #                     # clone the repository for Dockerfile
+    #                     git clone <your gitlab/github url>
+
+    #                     # substitute login info and domain url to Dockerfile
+    #                     # sed -i "s/"your_access_key_id"/${AwsAccessKeyId}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+    #                     # sed -i "s/"your_secret_access_key"/${AwsSecretAccessKey}/" /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+
+    #                     ########### HTTP connection start ###########
+    #                     # change the access permission of Dockerfile
+    #                     # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTP
+    #                     # build the docker image
+    #                     # docker build -t logstash-receiver-http-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTP .
+    #                     # create the docker container
+    #                     # docker run -itd -p 80:80 logstash-receiver-http-ubuntu
+    #                     ########### HTTP connection end ###########
+
+    #                     ########### HTTPS connection start ###########
+    #                     # change the access permission of Dockerfile
+    #                     # chmod 755 /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS
+    #                     # build the docker image
+    #                     docker build -t logstash-receiver-https-ubuntu --force-rm=true -f /home/ubuntu/logstashDocker/dockerLogstash/DockerfileLogstashReceiverHTTPS /home/ubuntu/logstashDocker/dockerLogstash
+    #                     # create the docker container
+    #                     docker run -itd -p 443:443 -v /home/ubuntu/logstashDocker/userInfo:/home/AWS/userInfo logstash-receiver-https-ubuntu
+    #                     ########### HTTPS connection end ###########
+
+    #                     # install aws cli for endpoint connection
+    #                     apt-get install -y awscli
+    #                     export AWS_ACCESS_KEY_ID=${AwsAccessKeyId} 
+    #                     export AWS_SECRET_ACCESS_KEY=${AwsSecretAccessKey}
+
+    # https://dev.classmethod.jp/cloud/two-ways-replacing-update-on-cloudformation/
+    # https://dev.classmethod.jp/cloud/aws/2018-aws-re-entering-autoscaling/
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-attribute-updatepolicy.html
+    LogsAutoScalingGroup:
+        Type: AWS::AutoScaling::AutoScalingGroup
+        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-attribute-updatepolicy.html
+        UpdatePolicy:
+            # https://qiita.com/ryo0301/items/f0c2d155874b14427dc6
+            AutoScalingRollingUpdate:
+                MaxBatchSize: !Ref MaxBatchSize
+                MinInstancesInService: !Ref MinSize 
+                PauseTime: PT5M
+                WillReplace: true
+                WaitOnResourceSignals: true
+        # # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-attribute-creationpolicy.html
+        # CreationPolicy:
+        #     ResourceSignal:
+        #         # AWS CloudFormation がリソースステータスを CREATE_COMPLETE に設定する前に必要な成功シグナルの受信数
+        #         Count: 1
+        #         # pause time PT1H = 1 hour, PT15M = 15 min 
+        #         Timeout: PT15M
+
+        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-as-group.html
+        Properties:
+            # LaunchTemplate:
+            #     LaunchTemplateId: !ImportValue LaunchTemplateLogReceiverId
+            #     Version: !ImportValue LaunchTemplateLogReceiverLatestNumber
+
+            # https://dev.classmethod.jp/cloud/aws/mixedinstances-autoscaling-cfn/
+            MixedInstancesPolicy:
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-autoscaling-autoscalinggroup-instancesdistribution.html
+                InstancesDistribution:
+                    # オンデマンドインスタンスが満たす必要がある Auto Scaling グループのキャパシティーの最小量。
+                    OnDemandBaseCapacity: 2
+                    # 範囲は 0～100 です。デフォルト値は 100 です。このパラメータを 100 に設定した場合、オンデマンドインスタンスが 100%、スポットインスタンスが 0% の割合になります。
+                    # OnDemandPercentageAboveBaseCapacity: 0
+                    OnDemandPercentageAboveBaseCapacity: 100
+                    # https://stackoverflow.com/questions/55497202/how-to-limit-the-number-of-spot-instace-pools-in-an-asg
+                    SpotInstancePools: 4
+
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-autoscaling-autoscalinggroup-launchtemplate.html
+                LaunchTemplate:
+                    LaunchTemplateSpecification:
+                        # LaunchTemplateId: !ImportValue LaunchTemplateLogReceiverId
+                        # Version: !ImportValue LaunchTemplateLogReceiverLatestNumber
+                        LaunchTemplateId: !Ref LaunchTemplateId 
+                        Version: !Ref templateVersion
+                    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-autoscaling-autoscalinggroup-launchtemplateoverrides.html
+                    Overrides:
+                        - InstanceType: t3a.medium
+                        - InstanceType: t3.medium
+                        - InstanceType: t2.medium
+                        - InstanceType: c5.large
+                        - InstanceType: m5a.large
+                        - InstanceType: m5.large
+                        # - InstanceType: r5a.large
+                        # - InstanceType: m5a.xlarge
+
+            # not need to define the AZs cus VPCZoneIdentifier is defined
+            # AvailabilityZones: 
+                # Fn::GetAZs: 
+                #     Ref: "AWS::Region"
+            # VPCZoneIdentifier: !Split [',', !ImportValue SubnetIds]
+            VPCZoneIdentifier: !Split [',', !Ref SubnetIds]
+
+            HealthCheckType: ELB
+            # default value is 5 minutes. https://github.com/hashicorp/terraform/issues/5658
+            # 新しい EC2 インスタンスがサービス状態になってから、Amazon EC2 Auto Scaling がヘルスチェックを開始するまでの秒数。 (sec)
+            HealthCheckGracePeriod: 840
+            # 規模の拡大や縮小の完了後、次の規模の拡大や縮小が開始できるようになるまでの秒数。 (sec)
+            Cooldown:  300
+            # LaunchConfigurationName: !Ref LaunchConfiguration
+            # MinSize: !ImportValue MinSize
+            # MaxSize: !ImportValue MaxSize
+            MinSize: !Ref MinSize
+            MaxSize: !Ref MaxSize
+            DesiredCapacity: !Ref DesiredCapacity
+            # Application Load Balancer または Network Load Balancer を指定するには、代わりに TargetGroupARNs を使用します。
+            TargetGroupARNs: 
+            # LoadBalancerNames:
+                - !Ref NonClassicELBTargetGroupArn
+            TerminationPolicies:
+                # https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/as-instance-termination.html
+                # - ClosestToNextInstanceHour
+                - OldestLaunchConfiguration
+
+            Tags:
+                - Key: Name
+                  # Value: !Join [ "-", [ "Ref":"EnvType", "InternetGatewayLogs" ] ]
+                  # Value: !Sub "LogsAutoScalingGroup-${EnvType}"
+                  # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-importvalue.html
+                  # Value:
+                  #   Fn::ImportValue: 
+                  #       !Sub "LogsAutoScalingGroup-${EnvType}"
+                  Value: !Sub EC2InstanceLogReceiverAutoScaling-${EnvType}
+
+                  # Value:
+                  #   Fn::ImportValue: 
+                  #       !Sub "EC2InstanceLogReceiver-${EnvType}"
+
+                  # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-as-tags.html
+                  PropagateAtLaunch: true
+            # https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_EnableMetricsCollection.html
+            MetricsCollection:
+                -
+                  Granularity: 1Minute
+                  Metrics:
+                      - GroupInServiceInstances
+                      - GroupPendingInstances
+                      - GroupStandbyInstances
+                      - GroupTerminatingInstances
+                      # - GroupTotalInstances
+
+            ##################################################
+            # notification setting
+            # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-autoscaling.html
+            # https://github.com/awsdocs/aws-cloudformation-user-guide/blob/master/doc_source/example-templates-autoscaling.md
+            NotificationConfigurations:
+                - TopicARN:
+                    Ref: LogsLogReceiverNotificationTopic
+                  NotificationTypes:
+                      - autoscaling:EC2_INSTANCE_LAUNCH
+                      - autoscaling:EC2_INSTANCE_LAUNCH_ERROR
+                      - autoscaling:EC2_INSTANCE_TERMINATE
+                      - autoscaling:EC2_INSTANCE_TERMINATE_ERROR
+            ##################################################
+
+
+    # https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/as-scaling-simple-step.html
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/quickref-autoscaling.html
+    # https://github.com/awsdocs/aws-cloudformation-user-guide/blob/master/doc_source/example-templates-autoscaling.md
+    # the following policies check the average of all ec2 instances uncder the load balancer, not each
+    ScaleOut1stPolicy:
+        Type: AWS::AutoScaling::ScalingPolicy
+        Properties:
+            AdjustmentType: ChangeInCapacity
+            AutoScalingGroupName: !Ref LogsAutoScalingGroup
+            Cooldown: 300
+            ScalingAdjustment: 1
+
+    ScaleIn1stPolicy:
+        Type: AWS::AutoScaling::ScalingPolicy
+        Properties:
+            AdjustmentType: ChangeInCapacity
+            AutoScalingGroupName: !Ref LogsAutoScalingGroup
+            Cooldown: 300
+            ScalingAdjustment: -1
+
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-cw-alarm.html
+    CPUAlarmHigh:
+        Type: AWS::CloudWatch::Alarm
+        Properties:
+            AlarmDescription: Scale-out CPU usage
+            # https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/as-instance-monitoring.html
+            MetricName: CPUUtilization
+            Namespace: AWS/EC2
+            Statistic: Average
+            # １　period: 300 evaluationperiods: 1 datapointstoalarm: 1
+            # ２　period: 60 evaluationperiods: 5 datapointstoalarm: 3
+            # １の場合は300秒に一回Cloudwatchが収集しているMetricsを見続けて、そのデータが1回でも閾値を超えたらアラームを出す。２は、　60秒毎に1回Cloudwatchが収集しているMetricsを見続けて、直近5回中3回閾値を超えていたらアラームを投げる。アラーム投げられるのはどっちも5分後。
+            # アラーム投げる速さはCloudwatchでどれくらいの頻度でMetricsを取っているかによる。一番細かくて1分に1回。Autoscalingに対してはこれはONにすべき(InstanceMonitoringでDefaultではTrueになってる)
+            Period: 180
+            EvaluationPeriods: 3
+            Threshold: 80
+            AlarmActions: 
+                - !Ref ScaleOut1stPolicy
+            Dimensions: 
+                - 
+                    Name: AutoScalingGroupName
+                    Value: !Ref LogsAutoScalingGroup
+            ComparisonOperator: GreaterThanThreshold
+    CPUAlarmLow:
+        Type: AWS::CloudWatch::Alarm
+        Properties: 
+            AlarmDescription: Scale-in CPU usage
+            # https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/as-instance-monitoring.html
+            MetricName: CPUUtilization
+            Namespace: "AWS/EC2"
+            Statistic: Average
+            # １　period: 300 evaluationperiods: 1 datapointstoalarm: 1
+            # ２　period: 60 evaluationperiods: 5 datapointstoalarm: 3
+            # １の場合は300秒に一回Cloudwatchが収集しているMetricsを見続けて、そのデータが1回でも閾値を超えたらアラームを出す。２は、　60秒毎に1回Cloudwatchが収集しているMetricsを見続けて、直近5回中3回閾値を超えていたらアラームを投げる。アラーム投げられるのはどっちも5分後。
+            # アラーム投げる速さはCloudwatchでどれくらいの頻度でMetricsを取っているかによる。一番細かくて1分に1回。Autoscalingに対してはこれはONにすべき(InstanceMonitoringでDefaultではTrueになってる)
+            Period: 180
+            EvaluationPeriods: 3
+            Threshold: 40
+            AlarmActions: 
+                - !Ref ScaleIn1stPolicy
+            Dimensions: 
+                - 
+                    Name: AutoScalingGroupName
+                    Value: !Ref LogsAutoScalingGroup
+            ComparisonOperator: LessThanThreshold
+
+    # https://qiita.com/atsumjp/items/15dce884a5480e1c24d4
+    # https://docs.aws.amazon.com/ja_jp/autoscaling/ec2/userguide/lifecycle-hooks.html
+    LogsAutoScalingGroupScaleInLifecycleHook:
+        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-as-lifecyclehook.html
+        Type: AWS::AutoScaling::LifecycleHook
+        Properties:
+            AutoScalingGroupName: !Ref LogsAutoScalingGroup
+            LifecycleTransition: autoscaling:EC2_INSTANCE_TERMINATING
+            DefaultResult: ABANDON 
+            HeartbeatTimeout: 300 #unit = second
+            NotificationTargetARN:
+                Ref: LogsLogReceiverNotificationTopic
+            # https://stackoverflow.com/questions/42077210/cloudformation-lifecycle-events-cannot-publish-to-sns
+            RoleARN: !ImportValue IAMAutoScalingNotificationAccessRoleArn
+                # Fn::GetAtt:
+                #   - 指定された通知ターゲットへの発行を Auto Scaling グループに許可する IAM ロールの ARN。ロールには Amazon SNS および Amazon SQS へのアクセス権限が必要です。
+                #   - Arn
+
+    # disable this when debugging the autoscaling system. it will make you take longer to for debugging.
+    LogsAutoScalingGroupScaleOutLifecycleHook:
+        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-as-lifecyclehook.html
+        Type: AWS::AutoScaling::LifecycleHook
+        Properties:
+            AutoScalingGroupName: !Ref LogsAutoScalingGroup
+            LifecycleTransition: autoscaling:EC2_INSTANCE_LAUNCHING
+            DefaultResult: CONTINUE 
+            HeartbeatTimeout: 120 #unit = second
+            NotificationTargetARN:
+                Ref: LogsLogReceiverNotificationTopic
+            # https://stackoverflow.com/questions/42077210/cloudformation-lifecycle-events-cannot-publish-to-sns
+            RoleARN: !ImportValue IAMAutoScalingNotificationAccessRoleArn
+                # Fn::GetAtt:
+                #   - 指定された通知ターゲットへの発行を Auto Scaling グループに許可する IAM ロールの ARN。ロールには Amazon SNS および Amazon SQS へのアクセス権限が必要です。
+                #   - Arn
+

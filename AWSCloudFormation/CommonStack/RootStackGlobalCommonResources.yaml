@@ -1,0 +1,625 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: vpc nested stack template
+
+Parameters:
+    EnvType:
+        Description: Environment type
+        Type: String
+        Default: dev
+        AllowedValues: [prod, dev, test]
+        ConstraintDescription: must specify prod, dev, or test
+
+# https://dev.classmethod.jp/cloud/aws/nlb-accesslog-s3-cfn/
+# https://dev.classmethod.jp/cloud/aws/nlb-accesslog-s3-cfn/
+Mappings:
+  S3bucketLoalBalancerlogsPrincipal:
+    us-east-1:
+      BucketPrincipal: '127311923021'
+    us-east-2:
+      BucketPrincipal: '033677994240'
+    us-west-1:
+      BucketPrincipal: '027434742980'
+    us-west-2:
+      BucketPrincipal: '797873946194'
+    ca-central-1:
+      BucketPrincipal: '985666609251'
+    eu-central-1:
+      BucketPrincipal: '054676820928'
+    eu-west-1:
+      BucketPrincipal: '156460612806'
+    eu-west-2:
+      BucketPrincipal: '652711504416'
+    eu-west-3:
+      BucketPrincipal: '009996457667'
+    eu-north-1:
+      BucketPrincipal: '897822967062'
+    ap-east-1:
+      BucketPrincipal: '754344448648'
+    ap-northeast-1:
+      BucketPrincipal: '582318560864'
+    ap-northeast-2:
+      BucketPrincipal: '600734575887'
+    ap-northeast-3:
+      BucketPrincipal: '383597477331'
+    ap-southeast-1:
+      BucketPrincipal: '114774131450'
+    ap-southeast-2:
+      BucketPrincipal: '783225319266'
+    ap-south-1:
+      BucketPrincipal: '718504428378'
+    sa-east-1:
+      BucketPrincipal: '507241528517'
+    us-gov-west-1:
+      BucketPrincipal: '048591011584'
+    us-gov-east-1:
+      BucketPrincipal: '190560391635'
+    cn-north-1:
+      BucketPrincipal: '638102146993'
+    cn-northwest-1:
+      BucketPrincipal: '037604701340'
+
+# source: http://awsinfra.site/2018/05/29/post-236/
+Resources:
+    ###################################################
+    ################# S3 bucket start
+    ###################################################
+    # Temp log s3 bucket
+    S3BucketForTempLog:
+        Type: AWS::S3::Bucket
+        DeletionPolicy: Delete
+        Properties:
+            BucketName: !Sub logs-temp-log-bucket-${EnvType}
+            AccessControl: Private
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+            # https://dev.classmethod.jp/cloud/aws/nlb-accesslog-s3-cfn/
+            LifecycleConfiguration:
+                Rules:
+                  - Id: AutoDelete
+                    Status: Enabled
+                    ExpirationInDays: 14
+                  # - Id: NoncurrentVersionExpiration
+                  #   Status: Enabled
+                  #   NoncurrentVersionExpirationInDays: 7
+            # VersioningConfiguration:
+            #     Status: Enabled
+
+    # Master log s3 bucket
+    S3BucketForMasterLog:
+        Type: AWS::S3::Bucket
+        Properties:
+            BucketName: !Sub logs-master-log-bucket-${EnvType}
+            AccessControl: Private
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+
+    # Load balancer log s3 bucket
+    S3BucketForLoadBalancerLog:
+        Type: AWS::S3::Bucket
+        Properties:
+            BucketName: !Sub logs-loadbalancer-log-${EnvType}
+            AccessControl: Private
+            PublicAccessBlockConfiguration:
+                BlockPublicAcls: True
+                BlockPublicPolicy: True
+                IgnorePublicAcls: True
+                RestrictPublicBuckets: True
+
+    ###################################################
+    ################# S3 bucket end
+    ###################################################
+
+    ###################################################
+    ################# IAM start 
+    ###################################################
+
+        ###################################################
+        ################# policies start 
+        ###################################################
+    VPCFlowLogsFullAccessPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # you cannot update the policy through cloudformation
+            # ManagedPolicyName: !Sub VPCFlowLogsFullAccessPolicy-${EnvType}
+            PolicyDocument:
+                # source: https://qrunch.net/@predora005/entries/x4ZCHBH7eMtACyXe
+                Version: '2012-10-17'  
+                Statement:
+                  - Effect: Allow
+                    Resource: "*"
+                    Action:
+                        - logs:CreateLogGroup
+                        - logs:CreateLogStream
+                        - logs:PutLogEvents
+                        - logs:DescribeLogGroups
+                        - logs:DescribeLogStreams
+
+    # https://dev.classmethod.jp/cloud/aws/ipv6-cfn-alb-autoscale-ec2/
+    # https://dev.classmethod.jp/cloud/aws/elb-access-log-bucket-policy/
+    S3bucketLoalBalancerlogsBucketPolicy:
+        Type: AWS::S3::BucketPolicy
+        DependsOn:
+        - S3BucketForLoadBalancerLog
+        Properties:
+            Bucket: !Ref S3BucketForLoadBalancerLog
+            PolicyDocument:
+                Id: !Sub S3bucketLoalBalancerlogsBucketPolicy-${EnvType}
+                Statement:
+                    # https://docs.aws.amazon.com/ja_jp/IAM/latest/UserGuide/reference_policies_elements_sid.html
+                    # https://dev.classmethod.jp/cloud/aws/nlb-accesslog-s3-cfn/
+                    - Sid: AwsLogDeliveryWrite
+                      Effect: Allow
+                      Action:
+                        - s3:PutObject
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${S3BucketForLoadBalancerLog}/*'
+                      Principal:
+                        Service: delivery.logs.amazonaws.com
+                      Condition:
+                        StringEquals:
+                          s3:x-amz-acl: bucket-owner-full-control
+                    - Sid: AwsLogDeliveryAclCheck
+                      Effect: Allow
+                      Action:
+                        - s3:GetBucketAcl
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${S3BucketForLoadBalancerLog}'
+                      Principal:
+                        Service: delivery.logs.amazonaws.com
+                    - Sid: AddPerameters
+                      Effect: Allow
+                      Action:
+                        - s3:PutObject
+                      Resource:
+                        - !Sub 'arn:aws:s3:::${S3BucketForLoadBalancerLog}/*'
+                      Principal:
+                        AWS: !FindInMap
+                            - S3bucketLoalBalancerlogsPrincipal
+                            - !Ref 'AWS::Region'
+                            - BucketPrincipal
+
+    ReferringCfnTemplateFilesAccessPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # you cannot update the policy through cloudformation
+            # ManagedPolicyName: !Sub ReferringCfnTemplateFilesAccessPolicy-${EnvType}
+            PolicyDocument: 
+                Version: 2012-10-17
+                Statement:
+                  - 
+                    Effect: "Allow"
+                    Resource: "arn:aws:cloudformation:*"
+                    # https://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/mon-scripts.html
+                    Action:
+                        # https://forums.aws.amazon.com/thread.jspa?threadID=220408
+                        # https://nordcloud.com/if-your-cloudformation-deployments-are-failing-this-is-why/
+                        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/using-iam-template.html
+                        - "cloudformation:DescribeStackResource"
+                        - "cloudformation:DescribeStackResources"
+                        - "cloudformation:DescribeStackEvents"
+                        - "cloudformation:DescribeStacks"
+                        - "cloudformation:SignalResource"                            
+
+    EC2MemoryWatchingPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # you cannot update the policy through cloudformation
+            # PolicyName: EC2MemoryWatchingPolicy
+            ManagedPolicyName: !Sub EC2MemoryWatchingPolicy-${EnvType}
+            PolicyDocument: 
+                Version: 2012-10-17
+                Statement:
+                  - 
+                    Effect: "Allow"
+                    Resource: "*"
+                    # https://docs.aws.amazon.com/ja_jp/AWSEC2/latest/UserGuide/mon-scripts.html
+                    Action:
+                        - cloudwatch:PutMetricData
+                        - cloudwatch:GetMetricStatistics
+                        - cloudwatch:ListMetrics
+                        - ec2:DescribeTags
+
+    S3TempLogAccessFromLogstashPolicy:
+        # https://www.thorntech.com/2018/07/s3-ec2-iam-cloudformation/
+        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html#cfn-iam-role-templateexamples
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # do not use below because you cannot update the policy through cloudformation
+            # ManagedPolicyName: s3templogaccessfromlogstash
+            ManagedPolicyName: !Sub s3templogaccessfromlogstash-${EnvType}
+            PolicyDocument:
+                # source: https://qrunch.net/@predora005/entries/x4ZCHBH7eMtACyXe
+                Version: 2012-10-17
+                Statement:  
+                  - Effect: Allow
+                    Action:
+                        # - "*"
+                        # - "s3:ListAllMyBuckets"  
+                        # - "s3:GetBucketLocation"
+                        # https://qiita.com/hssh2_bin/items/116408ba71e9ac0cc783
+                        - "s3:PutAnalyticsConfiguration"
+                        - "s3:PutAccelerateConfiguration"
+                        - "s3:DeleteObjectVersion"
+                        - "s3:ReplicateTags"
+                        - "s3:RestoreObject"
+                        - "s3:CreateBucket"
+                        - "s3:ReplicateObject"
+                        - "s3:PutEncryptionConfiguration"
+                        - "s3:DeleteBucketWebsite"
+                        - "s3:AbortMultipartUpload"
+                        - "s3:PutBucketTagging"
+                        - "s3:PutLifecycleConfiguration"
+                        - "s3:PutObjectTagging"
+                        - "s3:DeleteObject"
+                        - "s3:DeleteBucket"
+                        - "s3:PutBucketVersioning"
+                        - "s3:DeleteObjectTagging"
+                        - "s3:PutMetricsConfiguration"
+                        - "s3:PutReplicationConfiguration"
+                        - "s3:PutObjectVersionTagging"
+                        - "s3:DeleteObjectVersionTagging"
+                        - "s3:PutBucketCORS"
+                        - "s3:PutInventoryConfiguration"
+                        - "s3:PutObject"
+                        - "s3:PutBucketNotification"
+                        - "s3:PutBucketWebsite"
+                        - "s3:PutBucketRequestPayment"
+                        - "s3:PutBucketLogging"
+                        - "s3:ReplicateDelete"
+                    Resource:  
+                        # - "arn:aws:s3:::<bucketname>"  
+                        # - "arn:aws:s3:::<bucketname>/*"
+                        # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-properties-s3-bucket.html
+                        - !GetAtt S3BucketForTempLog.Arn
+                        # https://dev.classmethod.jp/cloud/aws/cloud%E2%80%8Bformation-intrinsic-function-memorandum/
+                        - Fn::Join:
+                            - ""
+                            - - !GetAtt S3BucketForTempLog.Arn
+                              - /*
+
+    # https://docs.aws.amazon.com/ja_jp/firehose/latest/dev/controlling-access.html#using-iam-s3    
+    KinesisFirehoseAccessCloudWatchLogsPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # do not use below because you cannot update the policy through cloudformation
+            # ManagedPolicyName: KinesisFirehoseAccessCloudWatchLogsPolicy-${EnvType}  
+            PolicyDocument:
+                # source: https://qrunch.net/@predora005/entries/x4ZCHBH7eMtACyXe
+                Version: 2012-10-17
+                Statement:
+                  - Effect: Allow
+                    Resource: "arn:aws:logs:*"
+                    Action:
+                        - logs:PutLogEvents
+                  - Effect: Allow
+                    Resource: "arn:aws:lambda:*"
+                    Action:
+                       - lambda:InvokeFunction
+                       - lambda:GetFunctionConfiguration
+
+    # https://docs.aws.amazon.com/ja_jp/firehose/latest/dev/controlling-access.html#using-iam-s3
+    KinesisFirehoseAccessS3Policy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+            # do not use below because you cannot update the policy through cloudformation
+            # ManagedPolicyName: KinesisFirehoseAccessS3Policy-${EnvType}
+            PolicyDocument:
+                # source: https://qrunch.net/@predora005/entries/x4ZCHBH7eMtACyXe
+                Version: '2012-10-17'  
+                Statement:
+                  - Effect: Allow
+                    Resource: "arn:aws:s3:::*"
+                    Action:
+                        - s3:AbortMultipartUpload        
+                        - s3:GetBucketLocation        
+                        - s3:ListBucket
+                        - s3:ListBucketMultipartUploads        
+                        - s3:PutObject
+                  - Effect: Allow
+                    Resource: "arn:aws:kinesis:*"
+                    Action:
+                        - kinesis:DescribeStream
+                        - kinesis:GetShardIterator
+                        - kinesis:GetRecords
+
+
+        ###################################################
+        ################# policies end
+        ###################################################
+
+        ###################################################
+        ################# roles start 
+        ###################################################
+    VPCFlowLogsRole:
+        Type: AWS::IAM::Role
+        DependsOn: VPCFlowLogsFullAccessPolicy
+        Properties: 
+            RoleName: VPCFlowLogsRole
+            AssumeRolePolicyDocument: 
+                Version: "2012-10-17"
+                Statement: 
+                  - Effect: Allow
+                    Principal: 
+                        Service: 
+                          - "vpc-flow-logs.amazonaws.com"
+                    Action:
+                      - "sts:AssumeRole"
+            Path: "/"
+            ManagedPolicyArns: 
+                - !Ref VPCFlowLogsFullAccessPolicy
+
+    SecurityDoctorLogsSendLogRole:
+        Type: AWS::IAM::Role
+        DependsOn:
+            - ReferringCfnTemplateFilesAccessPolicy
+        Properties:
+            RoleName: SecurityDoctorLogsSendLogRole
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement: 
+                    -
+                      Effect: "Allow"
+                      Principal:
+                        Service:
+                          - "ec2.amazonaws.com"
+                      Action:
+                        # https://christina04.hatenablog.com/entry/assume-role
+                        - "sts:AssumeRole"
+            Path: "/"
+            # source: https://qiita.com/kotatsu360/items/badfd3fabf2d8f385501
+            # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+            ManagedPolicyArns:
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/dynamic-references.html
+                - "arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess"
+                - !Ref ReferringCfnTemplateFilesAccessPolicy
+                - !Ref EC2MemoryWatchingPolicy
+                # use the following strong role on debugging
+                # - "arn:aws:iam::aws:policy/AdministratorAccess"
+
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    S3TempLogBucketAccessRole:
+        Type: AWS::IAM::Role
+        DependsOn:
+            - ReferringCfnTemplateFilesAccessPolicy
+            - EC2MemoryWatchingPolicy
+            - S3TempLogAccessFromLogstashPolicy            
+        Properties:
+            RoleName: S3TempLogBucketAccessRole
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement: 
+                    -
+                      Effect: "Allow"
+                      Principal:
+                        Service:
+                          - "ec2.amazonaws.com"
+                      Action:
+                        - "sts:AssumeRole"
+            Path: /
+            ManagedPolicyArns:
+                # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/dynamic-references.html
+                - "arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess"
+                - !Ref ReferringCfnTemplateFilesAccessPolicy
+                - !Ref EC2MemoryWatchingPolicy
+                - !Ref S3TempLogAccessFromLogstashPolicy
+                # - "arn:aws:iam::aws:policy/AmazonSecurityDoctorLogsSendLog"
+
+    # https://github.com/awslabs/ec2-spot-labs/blob/master/ec2-spot-fleet-launch-templates/ec2-spot-fleet-launch-templates.yaml
+    # https://docs.aws.amazon.com/ja_jp/AWSCloudFormation/latest/UserGuide/aws-resource-iam-role.html
+    EC2SpotFleetRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: EC2SpotFleetRole
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    -
+                      Action:
+                        - sts:AssumeRole
+                      Effect: Allow
+                      Principal:
+                        Service:
+                            - spotfleet.amazonaws.com
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole
+            Path: /
+
+    # https://stackoverflow.com/questions/42077210/cloudformation-lifecycle-events-cannot-publish-to-sns
+    AutoScalingNotificationAccessRole:
+        Type: AWS::IAM::Role
+        Properties:
+            RoleName: AutoScalingNotificationAccessRole
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    -
+                      Action:
+                        - sts:AssumeRole
+                      Effect: Allow
+                      # https://docs.aws.amazon.com/ja_jp/IAM/latest/UserGuide/reference_policies_elements_principal.html
+                      # プリンシパルは、AWS アカウント、IAM ユーザー、IAM ロール、フェデレーティッドユーザー、または引き受けたロールユーザーの Amazon リソースネーム (ARN) を使用して指定します。
+                      Principal:
+                        Service:
+                            - autoscaling.amazonaws.com
+            ManagedPolicyArns:
+                - arn:aws:iam::aws:policy/service-role/AutoScalingNotificationAccessRole
+            Path: /
+
+    FirehoseDeliveryAndLoggingRole:
+        Type: AWS::IAM::Role
+        DependsOn:
+            - KinesisFirehoseAccessCloudWatchLogsPolicy
+            - KinesisFirehoseAccessS3Policy
+        Properties:
+            RoleName: FirehoseDeliveryAndLoggingRole
+            AssumeRolePolicyDocument:
+                Version: 2012-10-17
+                Statement:
+                    -
+                      Action:
+                        - sts:AssumeRole
+                      Effect: Allow
+                      Principal:
+                        Service:
+                            - firehose.amazonaws.com
+            ManagedPolicyArns:
+                - !Ref KinesisFirehoseAccessCloudWatchLogsPolicy
+                - !Ref KinesisFirehoseAccessS3Policy
+        ###################################################
+        ################# roles end
+        ###################################################
+
+        ###################################################
+        ################# instance profile sart
+        ###################################################
+    # create instance profile, which is necessary to attach a role to ec2 instance
+    S3TempLogBucketAccessFromLogstashProfile:  
+        Type: AWS::IAM::InstanceProfile  
+        DependsOn: S3TempLogBucketAccessRole
+        Properties:  
+            Path: "/"  
+            Roles:  
+            - !Ref S3TempLogBucketAccessRole
+
+    # create instance profile, which is necessary to attach a role to ec2 instance
+    SecurityDoctorLogsSendLogInstanceProfile:  
+        Type: AWS::IAM::InstanceProfile  
+        DependsOn: SecurityDoctorLogsSendLogRole
+        Properties:  
+            Path: "/"  
+            Roles:  
+            - !Ref SecurityDoctorLogsSendLogRole
+
+        ###################################################
+        ################# instance profile end
+        ###################################################
+
+    ###################################################
+    ################# IAM end
+    ###################################################
+
+Outputs:
+    ########################################################
+    ####### S3
+    ########################################################
+    S3BucketForTempLogId:
+        Value: !Ref S3BucketForTempLog
+        Export:
+            Name: S3BucketForTempLogId
+    S3BucketForTempLogArn:
+        Value: !GetAtt S3BucketForTempLog.Arn
+        Export:
+            Name: S3BucketForTempLogArn
+
+    S3BucketForMasterLogId:
+        Value: !Ref S3BucketForMasterLog
+        Export:
+            Name: S3BucketForMasterLogId
+    S3BucketForMasterLogArn:
+        Value: !GetAtt S3BucketForMasterLog.Arn
+        Export:
+            Name: S3BucketForMasterLogArn
+
+    S3BucketForLoadBalancerLogId:
+        Value: !Ref S3BucketForLoadBalancerLog
+        Export:
+            Name: S3BucketForLoadBalancerLogId
+
+    ########################################################
+    ####### IAM
+    ########################################################
+
+    ############################
+    ###### role ######
+    IAMVPCFlowLogsRoleId:
+        Value: !Ref VPCFlowLogsRole
+        Export:
+            Name: VPCFlowLogsRoleId
+    IAMVPCFlowLogsRoleArn:
+        Value: !GetAtt VPCFlowLogsRole.Arn
+        Export:
+            Name: VPCFlowLogsRoleArn
+    IAMSecurityDoctorLogsSendLogRoleId:
+        Value: !Ref SecurityDoctorLogsSendLogRole
+        Export:
+            Name: IAMSecurityDoctorLogsSendLogRoleId
+    IAMSecurityDoctorLogsSendLogRoleArn:
+        Value: !Ref SecurityDoctorLogsSendLogRole
+        Export:
+            Name: IAMSecurityDoctorLogsSendLogRoleArn
+    IAMS3TempLogBucketAccessRoleId:
+        Value: !Ref S3TempLogBucketAccessRole
+        Export:
+            Name: IAMS3TempLogBucketAccessRoleId
+    IAMS3TempLogBucketAccessRoleArn:
+        Value: !Ref S3TempLogBucketAccessRole
+        Export:
+            Name: IAMS3TempLogBucketAccessRoleArn
+
+    # IAMTemplateFilesAccessRoleId:
+    #     Value: !Ref TemplateFilesAccessRole
+    #     Export:
+    #         Name: IAMTemplateFilesAccessRoleId
+
+    IAMEC2SpotFleetRoleId:
+        Value: !Ref EC2SpotFleetRole
+        Export:
+            Name: IAMEC2SpotFleetRoleId
+    IAMEC2SpotFleetRoleArn:
+        Value: !GetAtt EC2SpotFleetRole.Arn
+        Export:
+            Name: IAMEC2SpotFleetRoleArn
+
+    IAMAutoScalingNotificationAccessRoleId:
+        Value: !Ref AutoScalingNotificationAccessRole
+        Export:
+            Name: IAMAutoScalingNotificationAccessRoleId
+    IAMAutoScalingNotificationAccessRoleArn:
+        Value: !GetAtt AutoScalingNotificationAccessRole.Arn
+        Export:
+            Name: IAMAutoScalingNotificationAccessRoleArn
+    IAMFirehoseDeliveryAndLoggingRoleId:
+        Value: !Ref FirehoseDeliveryAndLoggingRole
+        Export:
+            Name: IAMFirehoseDeliveryAndLoggingRoleId
+    IAMFirehoseDeliveryAndLoggingRoleArn:
+        Value: !GetAtt FirehoseDeliveryAndLoggingRole.Arn
+        Export:
+            Name: IAMFirehoseDeliveryAndLoggingRoleArn
+    ############################
+    ##### instance profile #####
+    IAMSecurityDoctorLogsSendLogInstanceProfileId:
+        Value: !Ref SecurityDoctorLogsSendLogInstanceProfile
+        Export:
+            Name: IAMSecurityDoctorLogsSendLogInstanceProfileId
+    IAMSecurityDoctorLogsSendLogInstanceProfileArn:
+        Value: !GetAtt SecurityDoctorLogsSendLogInstanceProfile.Arn
+        Export:
+            Name: IAMSecurityDoctorLogsSendLogInstanceProfileArn
+
+    IAMS3TempLogBucketAccessFromLogstashProfileId:
+        Value: !Ref S3TempLogBucketAccessFromLogstashProfile
+        Export:
+            Name: IAMS3TempLogBucketAccessFromLogstashProfileId
+    IAMS3TempLogBucketAccessFromLogstashProfileArn:
+        Value: !GetAtt S3TempLogBucketAccessFromLogstashProfile.Arn
+        Export:
+            Name: IAMS3TempLogBucketAccessFromLogstashProfileArn
+
+    ############################
+    ##### instance policy #####
+    IAMReferringCfnTemplateFilesAccessPolicyId:
+        Value: !Ref ReferringCfnTemplateFilesAccessPolicy
+        Export:
+            Name: IAMReferringCfnTemplateFilesAccessPolicyId
+    IAMS3TempLogAccessFromLogstashPolicyId:
+        Value: !Ref S3TempLogAccessFromLogstashPolicy
+        Export:
+            Name: IAMS3TempLogAccessFromLogstashPolicyId
+
